@@ -6381,6 +6381,26 @@ function logError(str, isObj = false) {
         }
     });
 }
+function parseExcludePaths(rawValue = "") {
+    return String(rawValue || "")
+        .split(/\r?\n|\r|\n/g)
+        .map(p => p.trim().replace(/^\/|\/$/g, ""))
+        .filter(p => p.length > 0);
+}
+function isPathInExcludedFolders(pathValue, excludePaths) {
+    const path = String(pathValue || "");
+    return excludePaths.some(ex => path === ex || path.startsWith(ex + "/"));
+}
+function countRemoteLinksInContent(content = "") {
+    let matchCount = 0;
+    for (const reg_p of MD_SEARCH_PATTERN) {
+        const m = String(content).match(new RegExp(reg_p.source, reg_p.flags));
+        if (m) {
+            matchCount += m.length;
+        }
+    }
+    return matchCount;
+}
 function md5Sig(contentData = undefined) {
     try {
         var dec = new TextDecoder("utf-8");
@@ -20667,12 +20687,8 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     return;
                 }
                 const noteParentPath = path__default["default"].dirname(activeFile.path);
-                const excludeLocalizePaths = (this.settings.ExcludeLocalizeFoldersList || "")
-                    .split(/\r?\n|\r|\n/g)
-                    .map(p => p.trim().replace(/^\/|\/$/g, ""))
-                    .filter(p => p.length > 0);
-                const isLocalizeExcluded = (p) => excludeLocalizePaths.some(ex => p === ex || p.startsWith(ex + "/"));
-                if (isLocalizeExcluded(noteParentPath)) {
+                const excludeLocalizePaths = parseExcludePaths(this.settings.ExcludeLocalizeFoldersList);
+                if (isPathInExcludedFolders(noteParentPath, excludeLocalizePaths)) {
                     showBalloon("This folder is excluded from localize.", this.settings.showNotifications);
                     return;
                 }
@@ -20680,12 +20696,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
                 const noteList = [];
                 for (const file of files) {
                     const content = yield this.app.vault.cachedRead(file);
-                    let matchCount = 0;
-                    for (const reg_p of MD_SEARCH_PATTERN) {
-                        const m = content.match(new RegExp(reg_p.source, reg_p.flags));
-                        if (m)
-                            matchCount += m.length;
-                    }
+                    const matchCount = countRemoteLinksInContent(content);
                     if (matchCount > 0)
                         noteList.push({ file, matchCount });
                 }
@@ -20740,15 +20751,10 @@ class LocalImagesPlugin extends obsidian.Plugin {
             }
         });
         this.removeOrphans = (type = undefined, filesToRemove = undefined, noteFile = undefined) => () => __awaiter(this, void 0, void 0, function* () {
-            var _a, _b, _c, _d, _e, _f;
             const obsmediadir = app.vault.getConfig("attachmentFolderPath");
             const allFiles = this.app.vault.getFiles();
-            let oldRootdir = this.settings.mediaRootDir;
-            const excludeOrphanPaths = (this.settings.ExcludeOrphanFoldersList || "")
-                .split(/\r?\n|\r|\n/g)
-                .map(p => p.trim().replace(/^\/|\/$/g, ""))
-                .filter(p => p.length > 0);
-            const isOrphanExcluded = (p) => excludeOrphanPaths.some(ex => p === ex || p.startsWith(ex + "/"));
+            const excludeOrphanPaths = parseExcludePaths(this.settings.ExcludeOrphanFoldersList);
+            const isOrphanExcluded = (p) => isPathInExcludedFolders(p, excludeOrphanPaths);
             const collectBasename = (bucket, linkValue) => {
                 if (!linkValue) {
                     return;
@@ -20759,6 +20765,52 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     bucket.push(basename);
                 }
             };
+            const collectFileLinks = (file, pushLink) => __awaiter(this, void 0, void 0, function* () {
+                if (!file) {
+                    return;
+                }
+                if (this.ExemplaryOfCANVAS(file.path)) {
+                    let canvasData;
+                    try {
+                        canvasData = JSON.parse(yield app.vault.cachedRead(file));
+                    }
+                    catch (e) {
+                        return;
+                    }
+                    if (canvasData.nodes && canvasData.nodes.length > 0) {
+                        for (const node of canvasData.nodes) {
+                            if (node.type === "file") {
+                                pushLink(node.file);
+                            }
+                            else if (node.type == "text") {
+                                const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
+                                const allNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
+                                if (allNodeLinks === undefined) {
+                                    continue;
+                                }
+                                for (const nodeLink of allNodeLinks) {
+                                    pushLink(nodeLink.link);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (this.ExemplaryOfMD(file.path)) {
+                    const metaCache = this.app.metadataCache.getCache(file.path);
+                    const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
+                    const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
+                    if (embeds) {
+                        for (const embed of embeds) {
+                            pushLink(embed.link);
+                        }
+                    }
+                    if (links) {
+                        for (const link of links) {
+                            pushLink(link.link);
+                        }
+                    }
+                }
+            });
             if (type == "plugin") {
                 let orphanedAttachments = [];
                 let allAttachmentsLinks = [];
@@ -20782,51 +20834,12 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     }
                     const attachFolder = this.app.vault.getAbstractFileByPath(oldRootdir);
                     const allAttachments = (attachFolder === null || attachFolder === void 0 ? void 0 : attachFolder.children) || [];
-                    const folderMdFiles = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && path__default["default"].dirname(f.path) === noteParentPath);
-                    for (const folderMd of folderMdFiles) {
-                        const metaCache = this.app.metadataCache.getFileCache(folderMd);
-                        const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
-                        const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
-                        if (embeds) {
-                            for (const embed of embeds) {
-                                collectBasename(allAttachmentsLinks, embed.link);
-                            }
-                        }
-                        if (links) {
-                            for (const link of links) {
-                                collectBasename(allAttachmentsLinks, link.link);
-                            }
-                        }
-                    }
                     for (const file of allFiles) {
                         const parentPath = ((file === null || file === void 0 ? void 0 : file.parent) && file.parent.path) ? file.parent.path : "";
-                        if (parentPath !== noteParentPath || !this.ExemplaryOfCANVAS(file.path)) {
+                        if (parentPath !== noteParentPath || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
                             continue;
                         }
-                        let canvasData;
-                        try {
-                            canvasData = JSON.parse(yield app.vault.cachedRead(file));
-                        }
-                        catch (e) {
-                            continue;
-                        }
-                        if (canvasData.nodes && canvasData.nodes.length > 0) {
-                            for (const node of canvasData.nodes) {
-                                if (node.type === "file") {
-                                    collectBasename(allAttachmentsLinks, node.file);
-                                }
-                                else if (node.type == "text") {
-                                    const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
-                                    const AllNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
-                                    if (AllNodeLinks === undefined) {
-                                        continue;
-                                    }
-                                    for (const Nodelink of AllNodeLinks) {
-                                        collectBasename(allAttachmentsLinks, Nodelink.link);
-                                    }
-                                }
-                            }
-                        }
+                        yield collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue));
                     }
                     for (const attach of allAttachments) {
                         if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
@@ -20877,59 +20890,10 @@ class LocalImagesPlugin extends obsidian.Plugin {
                         if (isOrphanExcluded(parentPath)) {
                             continue;
                         }
-                        //Fix for canvas files
-                        if (file !== null && this.ExemplaryOfCANVAS(file.path)) {
-                            logError(file);
-                            logError(this.app.metadataCache.getCache(file.path));
-                            let canvasData;
-                            try {
-                                canvasData = JSON.parse(yield app.vault.cachedRead(file));
-                            }
-                            catch (e) {
-                                logError("Parse canvas data error");
-                                continue;
-                            }
-                            if (canvasData.nodes && canvasData.nodes.length > 0) {
-                                for (const node of canvasData.nodes) {
-                                    logError(node);
-                                    if (node.type === "file") {
-                                        logError("file json");
-                                        addFolderUsage(parentPath, node.file);
-                                    }
-                                    else if (node.type == "text") {
-                                        logError("text json");
-                                        //https://github.com/Fevol/obsidian-typings
-                                        //Undocumented API may be altered in the future
-                                        const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
-                                        const AllNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
-                                        logError(AllNodeLinks);
-                                        if (AllNodeLinks === undefined) {
-                                            continue;
-                                        }
-                                        for (const Nodelink of AllNodeLinks) {
-                                            addFolderUsage(parentPath, Nodelink.link);
-                                        }
-                                    }
-                                }
-                            }
+                        if (!file || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+                            continue;
                         }
-                        if (file !== null && this.ExemplaryOfMD(file.path)) {
-                            const metaCache = this.app.metadataCache.getCache(file.path);
-                            const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
-                            const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
-                            logError(embeds);
-                            logError(links);
-                            if (embeds) {
-                                for (const embed of embeds) {
-                                    addFolderUsage(parentPath, embed.link);
-                                }
-                            }
-                            if (links) {
-                                for (const link of links) {
-                                    addFolderUsage(parentPath, link.link);
-                                }
-                            }
-                        }
+                        yield collectFileLinks(file, (linkValue) => addFolderUsage(parentPath, linkValue));
                     }
                     const scannedFolders = new Set();
                     let orphanedAttachments = [];
@@ -20991,59 +20955,10 @@ class LocalImagesPlugin extends obsidian.Plugin {
                         if (isOrphanExcluded(parentPath)) {
                             continue;
                         }
-                        //Fix for canvas files
-                        if (file !== null && this.ExemplaryOfCANVAS(file.path)) {
-                            logError(file);
-                            logError(this.app.metadataCache.getCache(file.path));
-                            let canvasData;
-                            try {
-                                canvasData = JSON.parse(yield app.vault.cachedRead(file));
-                            }
-                            catch (e) {
-                                logError("Parse canvas data error");
-                                continue;
-                            }
-                            if (canvasData.nodes && canvasData.nodes.length > 0) {
-                                for (const node of canvasData.nodes) {
-                                    logError(node);
-                                    if (node.type === "file") {
-                                        logError("file json");
-                                        collectBasename(allAttachmentsLinks, node.file);
-                                    }
-                                    else if (node.type == "text") {
-                                        logError("text json");
-                                        //https://github.com/Fevol/obsidian-typings
-                                        //Undocumented API may be altered in the future
-                                        const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
-                                        const AllNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
-                                        logError(AllNodeLinks);
-                                        if (AllNodeLinks === undefined) {
-                                            continue;
-                                        }
-                                        for (const Nodelink of AllNodeLinks) {
-                                            collectBasename(allAttachmentsLinks, Nodelink.link);
-                                        }
-                                    }
-                                }
-                            }
+                        if (!file || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+                            continue;
                         }
-                        if (file !== null && this.ExemplaryOfMD(file.path)) {
-                            const metaCache = this.app.metadataCache.getCache(file.path);
-                            const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
-                            const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
-                            logError(embeds);
-                            logError(links);
-                            if (embeds) {
-                                for (const embed of embeds) {
-                                    collectBasename(allAttachmentsLinks, embed.link);
-                                }
-                            }
-                            if (links) {
-                                for (const link of links) {
-                                    collectBasename(allAttachmentsLinks, link.link);
-                                }
-                            }
-                        }
+                        yield collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue));
                     }
                     for (const attach of allAttachments) {
                         if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
@@ -21092,22 +21007,12 @@ class LocalImagesPlugin extends obsidian.Plugin {
             }
         });
         this.openProcessAllModal = () => __awaiter(this, void 0, void 0, function* () {
-            const excludeLocalizePaths = (this.settings.ExcludeLocalizeFoldersList || "")
-                .split(/\r?\n|\r|\n/g)
-                .map(p => p.trim().replace(/^\/|\/$/g, ""))
-                .filter(p => p.length > 0);
-            const isLocalizeExcluded = (p) => excludeLocalizePaths.some(ex => p === ex || p.startsWith(ex + "/"));
-            const files = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && !isLocalizeExcluded(path__default["default"].dirname(f.path)));
+            const excludeLocalizePaths = parseExcludePaths(this.settings.ExcludeLocalizeFoldersList);
+            const files = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && !isPathInExcludedFolders(path__default["default"].dirname(f.path), excludeLocalizePaths));
             const noteList = [];
             for (const file of files) {
                 const content = yield this.app.vault.cachedRead(file);
-                let matchCount = 0;
-                for (const reg_p of MD_SEARCH_PATTERN) {
-                    const m = content.match(new RegExp(reg_p.source, reg_p.flags));
-                    if (m) {
-                        matchCount += m.length;
-                    }
-                }
+                const matchCount = countRemoteLinksInContent(content);
                 if (matchCount > 0) {
                     noteList.push({ file, matchCount });
                 }
@@ -21212,11 +21117,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     return;
                 }
                 const subfolderName = obsmediadir.slice(2);
-                const excludeRenamePaths = (this.settings.ExcludeRenameFoldersList || "")
-                    .split(/\r?\n|\r|\n/g)
-                    .map(p => p.trim().replace(/^\/|\/$/g, ""))
-                    .filter(p => p.length > 0);
-                const isRenameExcluded = (p) => excludeRenamePaths.some(ex => p === ex || p.startsWith(ex + "/"));
+                const excludeRenamePaths = parseExcludePaths(this.settings.ExcludeRenameFoldersList);
                 const allVaultFiles = this.app.vault.getFiles();
                 const dirMap = new Map();
                 for (const file of allVaultFiles) {
@@ -21224,7 +21125,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
                         continue;
                     }
                     const parentPath = path__default["default"].dirname(file.path);
-                    if (isRenameExcluded(parentPath)) {
+                    if (isPathInExcludedFolders(parentPath, excludeRenamePaths)) {
                         continue;
                     }
                     if (!dirMap.has(parentPath)) {
