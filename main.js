@@ -6339,7 +6339,10 @@ const DEFAULT_SETTINGS = {
     DateFormat: "YYYY MM DD",
     ImgCompressionType: "image/jpeg",
     ExcludedFoldersList: "",
-    ExcludedFoldersListRegexp: ""
+    ExcludedFoldersListRegexp: "",
+    ExcludeOrphanFoldersList: "",
+    ExcludeRenameFoldersList: "",
+    ExcludeLocalizeFoldersList: ""
 };
 
 const fs2 = require('fs').promises;
@@ -14079,6 +14082,48 @@ class SettingTab extends obsidian.PluginSettingTab {
             text.inputEl.style.width = "100%";
         });
         new obsidian.Setting(containerEl)
+            .setName("Excluded folders for orphan deletion")
+            .setDesc("Folders excluded from 'Remove all orphaned attachments (Obsidian folder)'. One path per line.")
+            .addTextArea(text => {
+            text
+                .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                .setValue(this.plugin.settings.ExcludeOrphanFoldersList)
+                .onChange((value) => __awaiter(this, void 0, void 0, function* () {
+                this.plugin.settings.ExcludeOrphanFoldersList = value;
+                yield this.plugin.saveSettings();
+            }));
+            text.inputEl.rows = 4;
+            text.inputEl.style.width = "100%";
+        });
+        new obsidian.Setting(containerEl)
+            .setName("Excluded folders for MD5 rename")
+            .setDesc("Folders excluded from 'Rename attachments to MD5 (Obsidian folder)'. One path per line.")
+            .addTextArea(text => {
+            text
+                .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                .setValue(this.plugin.settings.ExcludeRenameFoldersList)
+                .onChange((value) => __awaiter(this, void 0, void 0, function* () {
+                this.plugin.settings.ExcludeRenameFoldersList = value;
+                yield this.plugin.saveSettings();
+            }));
+            text.inputEl.rows = 4;
+            text.inputEl.style.width = "100%";
+        });
+        new obsidian.Setting(containerEl)
+            .setName("Excluded folders for localize")
+            .setDesc("Folders excluded from 'Localize attachments for all your notes'. One path per line.")
+            .addTextArea(text => {
+            text
+                .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                .setValue(this.plugin.settings.ExcludeLocalizeFoldersList)
+                .onChange((value) => __awaiter(this, void 0, void 0, function* () {
+                this.plugin.settings.ExcludeLocalizeFoldersList = value;
+                yield this.plugin.saveSettings();
+            }));
+            text.inputEl.rows = 4;
+            text.inputEl.style.width = "100%";
+        });
+        new obsidian.Setting(containerEl)
             .setName("Image Quality")
             .setDesc("Image quality selection (30 to 100).")
             .addText((text) => text
@@ -20611,7 +20656,33 @@ class LocalImagesPlugin extends obsidian.Plugin {
             logError("processActivePage");
             try {
                 const activeFile = this.getCurrentNote();
-                yield this.processPage(activeFile, defaultdir);
+                if (!activeFile) {
+                    showBalloon("Please select a note or click inside selected note in canvas.", this.settings.showNotifications);
+                    return;
+                }
+                if (!this.ExemplaryOfMD(activeFile.path)) {
+                    showBalloon("Please, select a markdown note first.", this.settings.showNotifications);
+                    return;
+                }
+                const content = yield this.app.vault.cachedRead(activeFile);
+                let matchCount = 0;
+                for (const reg_p of MD_SEARCH_PATTERN) {
+                    const m = content.match(new RegExp(reg_p.source, reg_p.flags));
+                    if (m) {
+                        matchCount += m.length;
+                    }
+                }
+                if (matchCount == 0) {
+                    showBalloon("No remote attachments found — nothing to localize.", this.settings.showNotifications);
+                    return;
+                }
+                const mod = new ModalW1(this.app);
+                mod.messg = "Localize " + matchCount + " remote link(s) in note:\r\n  " + activeFile.path + "\r\n      ";
+                mod.plugin = this;
+                mod.callbackFunc = () => __awaiter(this, void 0, void 0, function* () {
+                    yield this.processPage(activeFile, defaultdir);
+                });
+                mod.open();
             }
             catch (e) {
                 showBalloon(`Please select a note or click inside selected note in canvas.`, this.settings.showNotifications);
@@ -20646,6 +20717,21 @@ class LocalImagesPlugin extends obsidian.Plugin {
             const obsmediadir = app.vault.getConfig("attachmentFolderPath");
             const allFiles = this.app.vault.getFiles();
             let oldRootdir = this.settings.mediaRootDir;
+            const excludeOrphanPaths = (this.settings.ExcludeOrphanFoldersList || "")
+                .split(/\r?\n|\r|\n/g)
+                .map(p => p.trim().replace(/^\/|\/$/g, ""))
+                .filter(p => p.length > 0);
+            const isOrphanExcluded = (p) => excludeOrphanPaths.some(ex => p === ex || p.startsWith(ex + "/"));
+            const collectBasename = (bucket, linkValue) => {
+                if (!linkValue) {
+                    return;
+                }
+                const cleanPath = String(linkValue).split("#")[0].split("?")[0];
+                const basename = path__default["default"].basename(cleanPath);
+                if (basename.length > 0) {
+                    bucket.push(basename);
+                }
+            };
             if (type == "plugin") {
                 let orphanedAttachments = [];
                 let allAttachmentsLinks = [];
@@ -20720,6 +20806,10 @@ class LocalImagesPlugin extends obsidian.Plugin {
                 let allAttachmentsLinks = [];
                 if (allFiles) {
                     for (const file of allFiles) {
+                        const parentPath = ((file === null || file === void 0 ? void 0 : file.parent) && file.parent.path) ? file.parent.path : "";
+                        if (isOrphanExcluded(parentPath)) {
+                            continue;
+                        }
                         //Fix for canvas files
                         if (file !== null && this.ExemplaryOfCANVAS(file.path)) {
                             logError(file);
@@ -20737,7 +20827,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
                                     logError(node);
                                     if (node.type === "file") {
                                         logError("file json");
-                                        allAttachmentsLinks.push(path__default["default"].basename(node.file));
+                                        collectBasename(allAttachmentsLinks, node.file);
                                     }
                                     else if (node.type == "text") {
                                         logError("text json");
@@ -20749,7 +20839,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
                                             continue;
                                         }
                                         for (const Nodelink of AllNodeLinks) {
-                                            allAttachmentsLinks.push(path__default["default"].basename(Nodelink.link));
+                                            collectBasename(allAttachmentsLinks, Nodelink.link);
                                         }
                                     }
                                 }
@@ -20763,17 +20853,21 @@ class LocalImagesPlugin extends obsidian.Plugin {
                             logError(links);
                             if (embeds) {
                                 for (const embed of embeds) {
-                                    allAttachmentsLinks.push(path__default["default"].basename(embed.link));
+                                    collectBasename(allAttachmentsLinks, embed.link);
                                 }
                             }
                             if (links) {
                                 for (const link of links) {
-                                    allAttachmentsLinks.push(path__default["default"].basename(link.link));
+                                    collectBasename(allAttachmentsLinks, link.link);
                                 }
                             }
                         }
                     }
                     for (const attach of allAttachments) {
+                        const attachParentPath = ((attach === null || attach === void 0 ? void 0 : attach.parent) && attach.parent.path) ? attach.parent.path : "";
+                        if (isOrphanExcluded(attachParentPath)) {
+                            continue;
+                        }
                         if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
                             logError(allAttachmentsLinks);
                             logError(attach.name);
@@ -20820,15 +20914,297 @@ class LocalImagesPlugin extends obsidian.Plugin {
                 showBalloon(filesToRemove.length + " file(s) " + msg, this.settings.showNotifications);
             }
         });
-        this.openProcessAllModal = () => {
+        this.openProcessAllModal = () => __awaiter(this, void 0, void 0, function* () {
+            const excludeLocalizePaths = (this.settings.ExcludeLocalizeFoldersList || "")
+                .split(/\r?\n|\r|\n/g)
+                .map(p => p.trim().replace(/^\/|\/$/g, ""))
+                .filter(p => p.length > 0);
+            const isLocalizeExcluded = (p) => excludeLocalizePaths.some(ex => p === ex || p.startsWith(ex + "/"));
+            const files = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && !isLocalizeExcluded(path__default["default"].dirname(f.path)));
+            const noteList = [];
+            for (const file of files) {
+                const content = yield this.app.vault.cachedRead(file);
+                let matchCount = 0;
+                for (const reg_p of MD_SEARCH_PATTERN) {
+                    const m = content.match(new RegExp(reg_p.source, reg_p.flags));
+                    if (m) {
+                        matchCount += m.length;
+                    }
+                }
+                if (matchCount > 0) {
+                    noteList.push({ file, matchCount });
+                }
+            }
+            if (noteList.length == 0) {
+                showBalloon("No remote attachments found across all notes — nothing to localize.", this.settings.showNotifications);
+                return;
+            }
+            noteList.sort((a, b) => a.file.path.localeCompare(b.file.path));
+            const totalLinks = noteList.reduce((s, n) => s + n.matchCount, 0);
+            let detail = "";
+            for (const { file, matchCount } of noteList) {
+                detail += "\r\n  " + file.path + "  →  " + matchCount + " link(s)";
+            }
             const mod = new ModalW1(this.app);
-            mod.messg = "Confirm processing all pages.\r\n ";
+            mod.messg = "Localize " + totalLinks + " remote link(s) across " + noteList.length + " note(s)" + detail + "\r\n      ";
             mod.plugin = this;
-            mod.callbackFunc = this.processAllPages;
+            const filesToProcess = noteList.map(x => x.file);
+            mod.callbackFunc = () => __awaiter(this, void 0, void 0, function* () {
+                for (const file of filesToProcess) {
+                    yield this.processPage(file, false);
+                }
+            });
             mod.open();
-        };
+        });
+        this.renameMD5 = (type, filesToRename, notesToUpdate) => () => __awaiter(this, void 0, void 0, function* () {
+            var _g, _h;
+            const obsmediadir = app.vault.getConfig("attachmentFolderPath");
+            if (type == "plugin") {
+                let oldRootdir = this.settings.mediaRootDir;
+                if (this.settings.saveAttE === "obsFolder") {
+                    if (obsmediadir.slice(0, 2) === "./") {
+                        oldRootdir = obsmediadir.slice(2);
+                    }
+                    else {
+                        showBalloon("This command requires a per-note attachment path (e.g. './images').\nUse 'Rename attachments to MD5 (Obsidian folder)' for global folders.\r\n", this.settings.showNotifications);
+                        return;
+                    }
+                }
+                if (oldRootdir.includes("${date}")) {
+                    showBalloon("Path pattern cannot contain ${date}.\nPlease change the mediaRootDir setting.\r\n", this.settings.showNotifications);
+                    return;
+                }
+                const noteFile = this.getCurrentNote();
+                if (!noteFile) {
+                    showBalloon("Please, select a note or click inside a note in canvas!", this.settings.showNotifications);
+                    return;
+                }
+                if (this.ExemplaryOfMD(noteFile.path)) {
+                    oldRootdir = oldRootdir.replace("${notename}", (_g = path__default["default"].parse(noteFile.path)) === null || _g === void 0 ? void 0 : _g.name);
+                    oldRootdir = trimAny(pathJoin([(_h = path__default["default"].parse(noteFile.path)) === null || _h === void 0 ? void 0 : _h.dir, oldRootdir]), ["\/"]);
+                    if (!(yield this.app.vault.exists(oldRootdir))) {
+                        showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications);
+                        return;
+                    }
+                    const attachFolder = this.app.vault.getAbstractFileByPath(oldRootdir);
+                    const allFolderFiles = (attachFolder === null || attachFolder === void 0 ? void 0 : attachFolder.children) || [];
+                    const noteDir = path__default["default"].dirname(noteFile.path);
+                    const allVaultFiles = this.app.vault.getFiles();
+                    const siblingNotes = allVaultFiles.filter(f => this.ExemplaryOfMD(f.path) && path__default["default"].dirname(f.path) === noteDir);
+                    const planRename = [];
+                    for (const f of allFolderFiles) {
+                        if (f.children != undefined) {
+                            continue;
+                        }
+                        const ext = path__default["default"].extname(f.name);
+                        if (path__default["default"].basename(f.name, ext).endsWith("_MD5")) {
+                            continue;
+                        }
+                        const binData = yield readFromDisk(pathJoin([this.app.vault.adapter.basePath, f.path]));
+                        if (!binData) {
+                            continue;
+                        }
+                        const newBaseName = md5Sig(binData);
+                        if (!newBaseName) {
+                            continue;
+                        }
+                        const newName = newBaseName + ext;
+                        if (newName === f.name) {
+                            continue;
+                        }
+                        const newPath = pathJoin([oldRootdir, newName]);
+                        if (yield this.app.vault.adapter.exists(newPath)) {
+                            continue;
+                        }
+                        planRename.push({ oldPath: f.path, newPath, oldName: f.name, newName });
+                    }
+                    if (planRename.length == 0) {
+                        showBalloon("All attachments already in MD5 format!", this.settings.showNotifications);
+                        return;
+                    }
+                    const mod = new ModalW1(this.app);
+                    mod.messg = "Confirm MD5 rename:\r\n  " + oldRootdir + "  →  " + planRename.length + " file(s)\r\n  Notes to update  →  " + siblingNotes.length + "\r\n      ";
+                    mod.plugin = this;
+                    mod.callbackFunc = this.renameMD5("execrename", planRename, siblingNotes);
+                    mod.open();
+                }
+            }
+            if (type == "obsidian") {
+                if (obsmediadir.slice(0, 2) !== "./") {
+                    showBalloon("This command requires a per-note attachment path (e.g. './images').\r\n", this.settings.showNotifications);
+                    return;
+                }
+                const subfolderName = obsmediadir.slice(2);
+                const excludeRenamePaths = (this.settings.ExcludeRenameFoldersList || "")
+                    .split(/\r?\n|\r|\n/g)
+                    .map(p => p.trim().replace(/^\/|\/$/g, ""))
+                    .filter(p => p.length > 0);
+                const isRenameExcluded = (p) => excludeRenamePaths.some(ex => p === ex || p.startsWith(ex + "/"));
+                const allVaultFiles = this.app.vault.getFiles();
+                const dirMap = new Map();
+                for (const file of allVaultFiles) {
+                    if (!file || !this.ExemplaryOfMD(file.path)) {
+                        continue;
+                    }
+                    const parentPath = path__default["default"].dirname(file.path);
+                    if (isRenameExcluded(parentPath)) {
+                        continue;
+                    }
+                    if (!dirMap.has(parentPath)) {
+                        const subPath = parentPath ? parentPath + "/" + subfolderName : subfolderName;
+                        const sub = this.app.vault.getAbstractFileByPath(subPath);
+                        if (sub && sub.children) {
+                            dirMap.set(parentPath, { notes: [], sub });
+                        }
+                    }
+                    if (dirMap.has(parentPath)) {
+                        dirMap.get(parentPath).notes.push(file);
+                    }
+                }
+                const planRename = [];
+                const folderCounts = new Map();
+                const allNotesToUpdate = [];
+                for (const [parentPath, { notes, sub }] of dirMap) {
+                    const folderPlan = [];
+                    for (const f of sub.children) {
+                        if (f.children != undefined) {
+                            continue;
+                        }
+                        const ext = path__default["default"].extname(f.name);
+                        if (path__default["default"].basename(f.name, ext).endsWith("_MD5")) {
+                            continue;
+                        }
+                        const binData = yield readFromDisk(pathJoin([this.app.vault.adapter.basePath, f.path]));
+                        if (!binData) {
+                            continue;
+                        }
+                        const newBaseName = md5Sig(binData);
+                        if (!newBaseName) {
+                            continue;
+                        }
+                        const newName = newBaseName + ext;
+                        if (newName === f.name) {
+                            continue;
+                        }
+                        const newPath = pathJoin([sub.path, newName]);
+                        if (yield this.app.vault.adapter.exists(newPath)) {
+                            continue;
+                        }
+                        planRename.push({ oldPath: f.path, newPath, oldName: f.name, newName });
+                        folderPlan.push(f.name);
+                    }
+                    if (folderPlan.length > 0) {
+                        folderCounts.set(parentPath, folderPlan.length);
+                        for (const n of notes) {
+                            if (!allNotesToUpdate.includes(n)) {
+                                allNotesToUpdate.push(n);
+                            }
+                        }
+                    }
+                }
+                if (planRename.length == 0) {
+                    showBalloon("All attachments already in MD5 format!", this.settings.showNotifications);
+                    return;
+                }
+                let detail = "";
+                for (const [p, cnt] of [...folderCounts.entries()].sort()) {
+                    detail += "\r\n  " + (p || "(vault root)") + "/" + subfolderName + "/  →  " + cnt + " file(s)";
+                }
+                const mod = new ModalW1(this.app);
+                mod.messg = "Rename " + planRename.length + " attachment(s) to MD5 format (" + dirMap.size + " folder(s) scanned)" + detail + "\r\n      ";
+                mod.plugin = this;
+                mod.callbackFunc = this.renameMD5("execrename", planRename, allNotesToUpdate);
+                mod.open();
+            }
+            if (type == "execrename") {
+                const rewriteMdLink = (content, item) => content.replace(/(!?\[[^\]]*?\]\()([^)]+)(\))/g, (full, prefix, target, suffix) => {
+                    const trimmedTarget = String(target).trim();
+                    if (!trimmedTarget.length) {
+                        return full;
+                    }
+                    const wsIndex = trimmedTarget.search(/\s/);
+                    const rawLinkPart = wsIndex === -1 ? trimmedTarget : trimmedTarget.slice(0, wsIndex);
+                    const trailingPart = wsIndex === -1 ? "" : trimmedTarget.slice(wsIndex);
+                    const wrapped = rawLinkPart.startsWith("<") && rawLinkPart.endsWith(">");
+                    const rawLinkClean = rawLinkPart.replace(/^<|>$/g, "");
+                    if (!rawLinkClean.length || /^(https?:|data:|file:|mailto:)/i.test(rawLinkClean)) {
+                        return full;
+                    }
+                    const suffixMatch = rawLinkClean.match(/([?#].*)$/);
+                    const basePathPart = rawLinkClean.split("#")[0].split("?")[0];
+                    if (path__default["default"].basename(basePathPart) !== item.oldName) {
+                        return full;
+                    }
+                    let newPathPart = item.newName;
+                    if (basePathPart.includes("/") || basePathPart.includes("\\")) {
+                        newPathPart = basePathPart.replace(/[^\/\\]+$/, item.newName);
+                    }
+                    const newTarget = newPathPart + (suffixMatch ? suffixMatch[1] : "");
+                    const wrappedTarget = wrapped ? "<" + newTarget + ">" : newTarget;
+                    return prefix + wrappedTarget + trailingPart + suffix;
+                });
+                const rewriteWikiLink = (content, item) => content.replace(/(\!\[\[|\[\[)([^\]]+)(\]\])/g, (full, opener, inner, closer) => {
+                    let pathPart = String(inner);
+                    let aliasPart = "";
+                    let anchorPart = "";
+                    const pipeIndex = pathPart.indexOf("|");
+                    if (pipeIndex !== -1) {
+                        aliasPart = pathPart.slice(pipeIndex);
+                        pathPart = pathPart.slice(0, pipeIndex);
+                    }
+                    const hashIndex = pathPart.indexOf("#");
+                    if (hashIndex !== -1) {
+                        anchorPart = pathPart.slice(hashIndex);
+                        pathPart = pathPart.slice(0, hashIndex);
+                    }
+                    const cleanPathPart = pathPart.trim();
+                    if (!cleanPathPart.length || /^(https?:|data:|file:|mailto:)/i.test(cleanPathPart)) {
+                        return full;
+                    }
+                    if (path__default["default"].basename(cleanPathPart) !== item.oldName) {
+                        return full;
+                    }
+                    let newPathPart = item.newName;
+                    if (cleanPathPart.includes("/") || cleanPathPart.includes("\\")) {
+                        newPathPart = cleanPathPart.replace(/[^\/\\]+$/, item.newName);
+                    }
+                    return opener + newPathPart + anchorPart + aliasPart + closer;
+                });
+                let renamedCount = 0;
+                for (const item of filesToRename) {
+                    try {
+                        yield this.app.vault.adapter.rename(item.oldPath, item.newPath);
+                        renamedCount++;
+                    }
+                    catch (e) {
+                        logError("Rename to MD5 failed: " + e);
+                    }
+                }
+                for (const note of notesToUpdate) {
+                    try {
+                        let filedata = yield this.app.vault.read(note);
+                        let changed = false;
+                        for (const item of filesToRename) {
+                            const updatedMd = rewriteMdLink(filedata, item);
+                            const updatedWiki = rewriteWikiLink(updatedMd, item);
+                            if (updatedWiki !== filedata) {
+                                filedata = updatedWiki;
+                                changed = true;
+                            }
+                        }
+                        if (changed) {
+                            yield this.app.vault.modify(note, filedata);
+                        }
+                    }
+                    catch (e) {
+                        logError("Update note refs failed: " + e);
+                    }
+                }
+                showBalloon(renamedCount + " attachment(s) renamed to MD5 format.", this.settings.showNotifications);
+            }
+        });
         this.processMdFilesOnTimer = () => __awaiter(this, void 0, void 0, function* () {
-            var _g;
+            var _i;
             const th = this;
             function onRet() {
                 th.newfCreated = [];
@@ -20908,9 +21284,9 @@ class LocalImagesPlugin extends obsidian.Plugin {
                                         if (this.settings.useMD5ForNewAtt) {
                                             newpath = pathJoin([mdir, newMD5 + compExt]);
                                         }
-                                        else {
-                                            newpath = pathJoin([mdir, cFileName(((_g = path__default["default"].parse(el.link)) === null || _g === void 0 ? void 0 : _g.name) + compExt)]);
-                                        }
+                                else {
+                                    newpath = pathJoin([mdir, cFileName(((_i = path__default["default"].parse(el.link)) === null || _i === void 0 ? void 0 : _i.name) + compExt)]);
+                                }
                                         newlink = yield getRDir(note, this.settings, newpath);
                                     }
                                 }
@@ -21079,6 +21455,16 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     id: "remove-orphans-from-plugin-folder",
                     name: "Remove all orphaned attachments (Plugin folder)",
                     callback: () => { this.removeOrphans("plugin")(); },
+                });
+                this.addCommand({
+                    id: "rename-attachments-md5-plugin",
+                    name: "Rename attachments to MD5 (Plugin folder)",
+                    callback: () => { this.renameMD5("plugin")(); },
+                });
+                this.addCommand({
+                    id: "rename-attachments-md5-obsidian",
+                    name: "Rename attachments to MD5 (Obsidian folder)",
+                    callback: () => { this.renameMD5("obsidian")(); },
                 });
             }
             // Some file has been created
