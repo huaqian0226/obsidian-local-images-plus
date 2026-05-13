@@ -20666,23 +20666,48 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     showBalloon("Please, select a markdown note first.", this.settings.showNotifications);
                     return;
                 }
-                const content = yield this.app.vault.cachedRead(activeFile);
-                let matchCount = 0;
-                for (const reg_p of MD_SEARCH_PATTERN) {
-                    const m = content.match(new RegExp(reg_p.source, reg_p.flags));
-                    if (m) {
-                        matchCount += m.length;
-                    }
-                }
-                if (matchCount == 0) {
-                    showBalloon("No remote attachments found — nothing to localize.", this.settings.showNotifications);
+                const noteParentPath = path__default["default"].dirname(activeFile.path);
+                const excludeLocalizePaths = (this.settings.ExcludeLocalizeFoldersList || "")
+                    .split(/\r?\n|\r|\n/g)
+                    .map(p => p.trim().replace(/^\/|\/$/g, ""))
+                    .filter(p => p.length > 0);
+                const isLocalizeExcluded = (p) => excludeLocalizePaths.some(ex => p === ex || p.startsWith(ex + "/"));
+                if (isLocalizeExcluded(noteParentPath)) {
+                    showBalloon("This folder is excluded from localize.", this.settings.showNotifications);
                     return;
                 }
+                const files = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && path__default["default"].dirname(f.path) === noteParentPath);
+                const noteList = [];
+                for (const file of files) {
+                    const content = yield this.app.vault.cachedRead(file);
+                    let matchCount = 0;
+                    for (const reg_p of MD_SEARCH_PATTERN) {
+                        const m = content.match(new RegExp(reg_p.source, reg_p.flags));
+                        if (m)
+                            matchCount += m.length;
+                    }
+                    if (matchCount > 0)
+                        noteList.push({ file, matchCount });
+                }
+                if (noteList.length == 0) {
+                    showBalloon("No remote attachments found in \"" + noteParentPath + "\" — nothing to localize.", this.settings.showNotifications);
+                    return;
+                }
+                noteList.sort((a, b) => a.file.path.localeCompare(b.file.path));
+                const totalLinks = noteList.reduce((s, n) => s + n.matchCount, 0);
+                let detail = "";
+                for (const { file, matchCount } of noteList) {
+                    detail += "\r\n  " + file.path + "  →  " + matchCount + " link(s)";
+                }
                 const mod = new ModalW1(this.app);
-                mod.messg = "Localize " + matchCount + " remote link(s) in note:\r\n  " + activeFile.path + "\r\n      ";
+                mod.messg = "Localize " + totalLinks + " remote link(s) across " + noteList.length + " note(s) in folder:\r\n  " + noteParentPath + detail + "\r\n      ";
                 mod.plugin = this;
+                const filesToProcess = noteList.map(x => x.file);
+                const _dd = defaultdir;
                 mod.callbackFunc = () => __awaiter(this, void 0, void 0, function* () {
-                    yield this.processPage(activeFile, defaultdir);
+                    for (const file of filesToProcess) {
+                        yield this.processPage(file, _dd);
+                    }
                 });
                 mod.open();
             }
@@ -20745,7 +20770,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     }
                 }
                 if (this.ExemplaryOfMD(noteFile.path)) {
-                    const noteParentPath = path__default["default"].dirname(noteFile.path);
+                    const noteParentPath = (noteFile.parent && noteFile.parent.path) ? noteFile.parent.path : "";
                     if (isOrphanExcluded(noteParentPath)) {
                         showBalloon("This note folder is excluded from orphan deletion.", this.settings.showNotifications);
                         return;
@@ -20757,23 +20782,50 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     }
                     const attachFolder = this.app.vault.getAbstractFileByPath(oldRootdir);
                     const allAttachments = (attachFolder === null || attachFolder === void 0 ? void 0 : attachFolder.children) || [];
-                    const metaCache = this.app.metadataCache.getFileCache(noteFile);
-                    const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
-                    const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
-                    const frembeds = yield FrontMatterParser(this, noteFile, FRONTMATTER_SEARCH_PATTERN);
-                    if ((frembeds === null || frembeds === void 0 ? void 0 : frembeds.files) && frembeds.files.length > 0) {
-                        for (const frembed of frembeds.files) {
-                            collectBasename(allAttachmentsLinks, frembed.link);
+                    const folderMdFiles = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && path__default["default"].dirname(f.path) === noteParentPath);
+                    for (const folderMd of folderMdFiles) {
+                        const metaCache = this.app.metadataCache.getFileCache(folderMd);
+                        const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
+                        const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
+                        if (embeds) {
+                            for (const embed of embeds) {
+                                collectBasename(allAttachmentsLinks, embed.link);
+                            }
+                        }
+                        if (links) {
+                            for (const link of links) {
+                                collectBasename(allAttachmentsLinks, link.link);
+                            }
                         }
                     }
-                    if (embeds) {
-                        for (const embed of embeds) {
-                            collectBasename(allAttachmentsLinks, embed.link);
+                    for (const file of allFiles) {
+                        const parentPath = ((file === null || file === void 0 ? void 0 : file.parent) && file.parent.path) ? file.parent.path : "";
+                        if (parentPath !== noteParentPath || !this.ExemplaryOfCANVAS(file.path)) {
+                            continue;
                         }
-                    }
-                    if (links) {
-                        for (const link of links) {
-                            collectBasename(allAttachmentsLinks, link.link);
+                        let canvasData;
+                        try {
+                            canvasData = JSON.parse(yield app.vault.cachedRead(file));
+                        }
+                        catch (e) {
+                            continue;
+                        }
+                        if (canvasData.nodes && canvasData.nodes.length > 0) {
+                            for (const node of canvasData.nodes) {
+                                if (node.type === "file") {
+                                    collectBasename(allAttachmentsLinks, node.file);
+                                }
+                                else if (node.type == "text") {
+                                    const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
+                                    const AllNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
+                                    if (AllNodeLinks === undefined) {
+                                        continue;
+                                    }
+                                    for (const Nodelink of AllNodeLinks) {
+                                        collectBasename(allAttachmentsLinks, Nodelink.link);
+                                    }
+                                }
+                            }
                         }
                     }
                     for (const attach of allAttachments) {
@@ -21076,7 +21128,7 @@ class LocalImagesPlugin extends obsidian.Plugin {
             const filesToProcess = noteList.map(x => x.file);
             mod.callbackFunc = () => __awaiter(this, void 0, void 0, function* () {
                 for (const file of filesToProcess) {
-                    yield this.processPage(file, false);
+                    yield this.processPage(file, true);
                 }
             });
             mod.open();
@@ -21571,13 +21623,13 @@ class LocalImagesPlugin extends obsidian.Plugin {
             yield this.loadSettings();
             this.addCommand({
                 id: "download-images",
-                name: "Localize attachments for the current note (plugin folder)",
+                name: "Localize attachments (Plugin folder)",
                 callback: this.processActivePage(false),
             });
             this.addCommand({
                 id: "download-images-def",
-                name: "Localize attachments for the current note (Obsidian folder)",
-                callback: this.processActivePage(true),
+                name: "Localize attachments (Obsidian folder)",
+                callback: this.openProcessAllModal,
             });
             if (!this.settings.disAddCom) {
                 this.addRibbonIcon("dice", APP_TITLE + "\r\nLocalize attachments (plugin folder)", () => {
@@ -21587,11 +21639,6 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     id: "set-title-as-name",
                     name: "Set the first found # header as a note name.",
                     callback: this.setTitleAsName,
-                });
-                this.addCommand({
-                    id: "download-images-all",
-                    name: "Localize attachments for all your notes (plugin folder)",
-                    callback: this.openProcessAllModal,
                 });
                 this.addCommand({
                     id: "convert-selection-to-URI",
