@@ -1,19 +1,14 @@
-/build/
-
-# Intellij
-*.iml
-.idea
-
 # npm
-node_modules
-
-# build
-main.js
-*.js.map
+node_modules/
 
 # obsidian
 data.json
 
-# build
-obsidian_local_images_plus_latest.7z
-test.sh
+# Backups
+*.bak
+
+# MacOS
+.DS_Store
+
+# Recorded changes
+log.md
