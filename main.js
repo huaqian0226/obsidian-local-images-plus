@@ -20615,9 +20615,11 @@ class ModalW1 extends obsidian.Modal {
     onOpen() {
         let { contentEl, titleEl } = this;
         titleEl.setText(APP_TITLE);
-        contentEl.createDiv({
+        const messageEl = contentEl.createEl("pre", {
             text: this.messg
         });
+        messageEl.style.whiteSpace = "pre-wrap";
+        messageEl.style.wordBreak = "break-word";
         contentEl.createEl("button", {
             cls: ["mod-cta"],
             text: "Cancel"
@@ -20735,12 +20737,6 @@ class LocalImagesPlugin extends obsidian.Plugin {
             if (type == "plugin") {
                 let orphanedAttachments = [];
                 let allAttachmentsLinks = [];
-                if (this.settings.saveAttE != "nextToNoteS" ||
-                    !path__default["default"].basename(oldRootdir).endsWith("${notename}") ||
-                    oldRootdir.includes("${date}")) {
-                    showBalloon("This command requires the settings 'Next to note in the folder specified below' and pattern '${notename}' at the end to be enabled, also the path cannot contain ${date} pattern.\nPlease, change settings first!\r\n", this.settings.showNotifications);
-                    return;
-                }
                 if (!noteFile) {
                     noteFile = this.getCurrentNote();
                     if (!noteFile) {
@@ -20749,44 +20745,46 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     }
                 }
                 if (this.ExemplaryOfMD(noteFile.path)) {
-                    oldRootdir = oldRootdir.replace("${notename}", (_a = path__default["default"].parse(noteFile.path)) === null || _a === void 0 ? void 0 : _a.name);
-                    oldRootdir = trimAny(pathJoin([(_b = path__default["default"].parse(noteFile.path)) === null || _b === void 0 ? void 0 : _b.dir, oldRootdir]), ["\/"]);
+                    const noteParentPath = path__default["default"].dirname(noteFile.path);
+                    if (isOrphanExcluded(noteParentPath)) {
+                        showBalloon("This note folder is excluded from orphan deletion.", this.settings.showNotifications);
+                        return;
+                    }
+                    const oldRootdir = yield getMDir(this.app, noteFile, this.settings);
                     if (!(yield this.app.vault.exists(oldRootdir))) {
                         showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications);
                         return;
                     }
-                    const allAttachments = yield ((_c = this.app.vault.getAbstractFileByPath(oldRootdir)) === null || _c === void 0 ? void 0 : _c.children);
+                    const attachFolder = this.app.vault.getAbstractFileByPath(oldRootdir);
+                    const allAttachments = (attachFolder === null || attachFolder === void 0 ? void 0 : attachFolder.children) || [];
                     const metaCache = this.app.metadataCache.getFileCache(noteFile);
                     const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
                     const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
                     const frembeds = yield FrontMatterParser(this, noteFile, FRONTMATTER_SEARCH_PATTERN);
-                    if (((_d = frembeds.files) === null || _d === void 0 ? void 0 : _d.length) > 0) {
+                    if ((frembeds === null || frembeds === void 0 ? void 0 : frembeds.files) && frembeds.files.length > 0) {
                         for (const frembed of frembeds.files) {
-                            allAttachmentsLinks.push(frembed.link);
-                            console.log(frembed.link);
+                            collectBasename(allAttachmentsLinks, frembed.link);
                         }
                     }
                     if (embeds) {
                         for (const embed of embeds) {
-                            allAttachmentsLinks.push(path__default["default"].basename(embed.link));
+                            collectBasename(allAttachmentsLinks, embed.link);
                         }
                     }
                     if (links) {
                         for (const link of links) {
-                            allAttachmentsLinks.push(path__default["default"].basename(link.link));
+                            collectBasename(allAttachmentsLinks, link.link);
                         }
                     }
-                    if (allAttachments) {
-                        for (const attach of allAttachments) {
-                            if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
-                                logError("orph: " + attach.basename);
-                                orphanedAttachments.push(attach);
-                            }
+                    for (const attach of allAttachments) {
+                        if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
+                            logError("orph: " + attach.basename);
+                            orphanedAttachments.push(attach);
                         }
                     }
                     if (orphanedAttachments.length > 0) {
                         const mod = new ModalW1(this.app);
-                        mod.messg = "Confirm remove " + orphanedAttachments.length + " orphan(s) from '" + oldRootdir + "'\r\n\r\n      ";
+                        mod.messg = "Confirm remove orphaned attachments:\r\n  " + oldRootdir + "  →  " + orphanedAttachments.length + " file(s)\r\n      ";
                         mod.plugin = this;
                         mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments);
                         mod.open();
@@ -20797,14 +20795,145 @@ class LocalImagesPlugin extends obsidian.Plugin {
                 }
             }
             if (type == "obsidian") {
-                if (obsmediadir.slice(0, 2) == "./" || obsmediadir == "/") {
-                    showBalloon("This command cannot run on vault's root or on subfolder next to note!\nPlease, change settings first!\r\n", this.settings.showNotifications);
+                if (obsmediadir == "/") {
+                    showBalloon("This command cannot run on vault root.\nPlease, change settings first!\r\n", this.settings.showNotifications);
                     return;
                 }
-                const allAttachments = (_e = this.app.vault.getAbstractFileByPath(obsmediadir)) === null || _e === void 0 ? void 0 : _e.children;
-                let orphanedAttachments = [];
-                let allAttachmentsLinks = [];
-                if (allFiles) {
+                if (obsmediadir.slice(0, 2) == "./") {
+                    const subfolderName = obsmediadir.slice(2);
+                    if (!subfolderName.length) {
+                        showBalloon("Invalid Obsidian attachment folder path.\r\n", this.settings.showNotifications);
+                        return;
+                    }
+                    const usedByParentFolder = new Map();
+                    const addFolderUsage = (parentPath, linkValue) => {
+                        if (!linkValue) {
+                            return;
+                        }
+                        const cleanPath = String(linkValue).split("#")[0].split("?")[0];
+                        const baseName = path__default["default"].basename(cleanPath);
+                        if (!baseName.length) {
+                            return;
+                        }
+                        if (!usedByParentFolder.has(parentPath)) {
+                            usedByParentFolder.set(parentPath, new Set());
+                        }
+                        usedByParentFolder.get(parentPath).add(baseName);
+                    };
+                    for (const file of allFiles) {
+                        const parentPath = ((file === null || file === void 0 ? void 0 : file.parent) && file.parent.path) ? file.parent.path : "";
+                        if (isOrphanExcluded(parentPath)) {
+                            continue;
+                        }
+                        //Fix for canvas files
+                        if (file !== null && this.ExemplaryOfCANVAS(file.path)) {
+                            logError(file);
+                            logError(this.app.metadataCache.getCache(file.path));
+                            let canvasData;
+                            try {
+                                canvasData = JSON.parse(yield app.vault.cachedRead(file));
+                            }
+                            catch (e) {
+                                logError("Parse canvas data error");
+                                continue;
+                            }
+                            if (canvasData.nodes && canvasData.nodes.length > 0) {
+                                for (const node of canvasData.nodes) {
+                                    logError(node);
+                                    if (node.type === "file") {
+                                        logError("file json");
+                                        addFolderUsage(parentPath, node.file);
+                                    }
+                                    else if (node.type == "text") {
+                                        logError("text json");
+                                        //https://github.com/Fevol/obsidian-typings
+                                        //Undocumented API may be altered in the future
+                                        const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
+                                        const AllNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
+                                        logError(AllNodeLinks);
+                                        if (AllNodeLinks === undefined) {
+                                            continue;
+                                        }
+                                        for (const Nodelink of AllNodeLinks) {
+                                            addFolderUsage(parentPath, Nodelink.link);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (file !== null && this.ExemplaryOfMD(file.path)) {
+                            const metaCache = this.app.metadataCache.getCache(file.path);
+                            const embeds = metaCache === null || metaCache === void 0 ? void 0 : metaCache.embeds;
+                            const links = metaCache === null || metaCache === void 0 ? void 0 : metaCache.links;
+                            logError(embeds);
+                            logError(links);
+                            if (embeds) {
+                                for (const embed of embeds) {
+                                    addFolderUsage(parentPath, embed.link);
+                                }
+                            }
+                            if (links) {
+                                for (const link of links) {
+                                    addFolderUsage(parentPath, link.link);
+                                }
+                            }
+                        }
+                    }
+                    const scannedFolders = new Set();
+                    let orphanedAttachments = [];
+                    const folderCounts = new Map();
+                    for (const file of allFiles) {
+                        if (!(file && this.ExemplaryOfMD(file.path))) {
+                            continue;
+                        }
+                        const parentPath = ((file === null || file === void 0 ? void 0 : file.parent) && file.parent.path) ? file.parent.path : "";
+                        if (isOrphanExcluded(parentPath)) {
+                            continue;
+                        }
+                        const attachFolderPath = parentPath ? parentPath + "/" + subfolderName : subfolderName;
+                        if (scannedFolders.has(attachFolderPath)) {
+                            continue;
+                        }
+                        scannedFolders.add(attachFolderPath);
+                        const attachFolder = this.app.vault.getAbstractFileByPath(attachFolderPath);
+                        if (!(attachFolder && attachFolder.children)) {
+                            continue;
+                        }
+                        const usedSet = usedByParentFolder.get(parentPath) || new Set();
+                        let folderOrphanCount = 0;
+                        for (const attach of attachFolder.children) {
+                            if (attach.children != undefined) {
+                                continue;
+                            }
+                            if (!usedSet.has(attach.name)) {
+                                orphanedAttachments.push(attach);
+                                folderOrphanCount++;
+                            }
+                        }
+                        if (folderOrphanCount > 0) {
+                            folderCounts.set(attachFolderPath, folderOrphanCount);
+                        }
+                    }
+                    if (orphanedAttachments.length > 0) {
+                        let detail = "";
+                        for (const [p, cnt] of [...folderCounts.entries()].sort()) {
+                            detail += "\r\n  " + p + "  →  " + cnt + " file(s)";
+                        }
+                        const mod = new ModalW1(this.app);
+                        mod.messg = "Confirm remove orphaned attachments:" + detail + "\r\n      ";
+                        mod.plugin = this;
+                        mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments);
+                        mod.open();
+                    }
+                    else {
+                        showBalloon("No orphaned files found!", this.settings.showNotifications);
+                    }
+                }
+                else {
+                    const attachFolder = this.app.vault.getAbstractFileByPath(obsmediadir);
+                    const allAttachments = (attachFolder === null || attachFolder === void 0 ? void 0 : attachFolder.children) || [];
+                    let orphanedAttachments = [];
+                    let allAttachmentsLinks = [];
                     for (const file of allFiles) {
                         const parentPath = ((file === null || file === void 0 ? void 0 : file.parent) && file.parent.path) ? file.parent.path : "";
                         if (isOrphanExcluded(parentPath)) {
@@ -20832,8 +20961,9 @@ class LocalImagesPlugin extends obsidian.Plugin {
                                     else if (node.type == "text") {
                                         logError("text json");
                                         //https://github.com/Fevol/obsidian-typings
-                                        //Undocumented API, may be altered in the future
-                                        const AllNodeLinks = (_f = (yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text))) === null || _f === void 0 ? void 0 : _f.links;
+                                        //Undocumented API may be altered in the future
+                                        const parsedNodeLinks = yield this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text);
+                                        const AllNodeLinks = parsedNodeLinks === null || parsedNodeLinks === void 0 ? void 0 : parsedNodeLinks.links;
                                         logError(AllNodeLinks);
                                         if (AllNodeLinks === undefined) {
                                             continue;
@@ -20864,10 +20994,6 @@ class LocalImagesPlugin extends obsidian.Plugin {
                         }
                     }
                     for (const attach of allAttachments) {
-                        const attachParentPath = ((attach === null || attach === void 0 ? void 0 : attach.parent) && attach.parent.path) ? attach.parent.path : "";
-                        if (isOrphanExcluded(attachParentPath)) {
-                            continue;
-                        }
                         if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
                             logError(allAttachmentsLinks);
                             logError(attach.name);
@@ -20875,19 +21001,18 @@ class LocalImagesPlugin extends obsidian.Plugin {
                             orphanedAttachments.push(attach);
                         }
                     }
-                }
-                logError("Orphaned: ");
-                logError(orphanedAttachments, true);
-                if (orphanedAttachments.length > 0) {
-                    const mod = new ModalW1(this.app);
-                    mod.messg = "Confirm remove " + orphanedAttachments.length + " orphan(s) from '" + obsmediadir + "  '\r\n \
-          NOTE: Be careful when running this command on Obsidian attachments folder, since some html-linked files may also be moved.\r\n      ";
-                    mod.plugin = this;
-                    mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments);
-                    mod.open();
-                }
-                else {
-                    showBalloon("No orphaned files found!", this.settings.showNotifications);
+                    logError("Orphaned: ");
+                    logError(orphanedAttachments, true);
+                    if (orphanedAttachments.length > 0) {
+                        const mod = new ModalW1(this.app);
+                        mod.messg = "Confirm remove orphaned attachments:\r\n  " + obsmediadir + "  →  " + orphanedAttachments.length + " file(s)\r\n  NOTE: Be careful when running this command on Obsidian attachments folder, since some html-linked files may also be moved.\r\n      ";
+                        mod.plugin = this;
+                        mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments);
+                        mod.open();
+                    }
+                    else {
+                        showBalloon("No orphaned files found!", this.settings.showNotifications);
+                    }
                 }
             }
             if (type == "execremove") {
@@ -21117,7 +21242,41 @@ class LocalImagesPlugin extends obsidian.Plugin {
                 mod.open();
             }
             if (type == "execrename") {
-                const rewriteMdLink = (content, item) => content.replace(/(!?\[[^\]]*?\]\()([^)]+)(\))/g, (full, prefix, target, suffix) => {
+                const normalizeVaultPath = (p) => trimAny(normalizePath(String(p || "")), ["\/"]);
+                const resolveLinkToVaultPath = (notePath, linkPath) => {
+                    if (!linkPath) {
+                        return "";
+                    }
+                    let decoded = String(linkPath);
+                    try {
+                        decoded = decodeURI(decoded);
+                    }
+                    catch (e) {
+                    }
+                    decoded = decoded.trim().replace(/^<|>$/g, "");
+                    if (!decoded || /^(https?:|data:|file:|mailto:)/i.test(decoded)) {
+                        return "";
+                    }
+                    const pathPart = decoded.split("#")[0].split("?")[0];
+                    if (!pathPart) {
+                        return "";
+                    }
+                    if (pathPart.startsWith("/")) {
+                        return normalizeVaultPath(pathPart.slice(1));
+                    }
+                    const noteDir = normalizeVaultPath(path__default["default"].dirname(notePath));
+                    return normalizeVaultPath(pathJoin([noteDir, pathPart]));
+                };
+                const buildRelativeLink = (notePath, targetPath) => {
+                    const noteDir = normalizeVaultPath(path__default["default"].dirname(notePath));
+                    const normalizedTargetPath = normalizeVaultPath(targetPath);
+                    const relPath = path__default["default"].relative(path__default["default"].sep + noteDir, path__default["default"].sep + normalizedTargetPath);
+                    const normalizedRelPath = relPath && relPath.length > 0
+                        ? relPath
+                        : path__default["default"].basename(normalizedTargetPath);
+                    return normalizePath(normalizedRelPath);
+                };
+                const rewriteMdLink = (content, note, item) => content.replace(/(!?\[[^\]]*?\]\()([^)]+)(\))/g, (full, prefix, target, suffix) => {
                     const trimmedTarget = String(target).trim();
                     if (!trimmedTarget.length) {
                         return full;
@@ -21125,25 +21284,24 @@ class LocalImagesPlugin extends obsidian.Plugin {
                     const wsIndex = trimmedTarget.search(/\s/);
                     const rawLinkPart = wsIndex === -1 ? trimmedTarget : trimmedTarget.slice(0, wsIndex);
                     const trailingPart = wsIndex === -1 ? "" : trimmedTarget.slice(wsIndex);
-                    const wrapped = rawLinkPart.startsWith("<") && rawLinkPart.endsWith(">");
                     const rawLinkClean = rawLinkPart.replace(/^<|>$/g, "");
-                    if (!rawLinkClean.length || /^(https?:|data:|file:|mailto:)/i.test(rawLinkClean)) {
+                    const resolvedPath = resolveLinkToVaultPath(note.path, rawLinkClean);
+                    const oldPath = normalizeVaultPath(item.oldPath);
+                    const basePathPart = rawLinkClean.split("#")[0].split("?")[0];
+                    const baseNameOnlyMatch = path__default["default"].basename(basePathPart) === item.oldName &&
+                        !basePathPart.includes("/") &&
+                        !basePathPart.includes("\\");
+                    if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
                         return full;
                     }
                     const suffixMatch = rawLinkClean.match(/([?#].*)$/);
-                    const basePathPart = rawLinkClean.split("#")[0].split("?")[0];
-                    if (path__default["default"].basename(basePathPart) !== item.oldName) {
-                        return full;
-                    }
-                    let newPathPart = item.newName;
-                    if (basePathPart.includes("/") || basePathPart.includes("\\")) {
-                        newPathPart = basePathPart.replace(/[^\/\\]+$/, item.newName);
-                    }
-                    const newTarget = newPathPart + (suffixMatch ? suffixMatch[1] : "");
-                    const wrappedTarget = wrapped ? "<" + newTarget + ">" : newTarget;
-                    return prefix + wrappedTarget + trailingPart + suffix;
+                    const relPath = buildRelativeLink(note.path, item.newPath) + (suffixMatch ? suffixMatch[1] : "");
+                    const wrappedRelPath = rawLinkPart.startsWith("<") && rawLinkPart.endsWith(">")
+                        ? "<" + encodeURI(relPath) + ">"
+                        : encodeURI(relPath);
+                    return prefix + wrappedRelPath + trailingPart + suffix;
                 });
-                const rewriteWikiLink = (content, item) => content.replace(/(\!\[\[|\[\[)([^\]]+)(\]\])/g, (full, opener, inner, closer) => {
+                const rewriteWikiLink = (content, note, item) => content.replace(/(\!\[\[|\[\[)([^\]]+)(\]\])/g, (full, opener, inner, closer) => {
                     let pathPart = String(inner);
                     let aliasPart = "";
                     let anchorPart = "";
@@ -21158,17 +21316,16 @@ class LocalImagesPlugin extends obsidian.Plugin {
                         pathPart = pathPart.slice(0, hashIndex);
                     }
                     const cleanPathPart = pathPart.trim();
-                    if (!cleanPathPart.length || /^(https?:|data:|file:|mailto:)/i.test(cleanPathPart)) {
+                    const resolvedPath = resolveLinkToVaultPath(note.path, cleanPathPart);
+                    const oldPath = normalizeVaultPath(item.oldPath);
+                    const baseNameOnlyMatch = path__default["default"].basename(cleanPathPart) === item.oldName &&
+                        !cleanPathPart.includes("/") &&
+                        !cleanPathPart.includes("\\");
+                    if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
                         return full;
                     }
-                    if (path__default["default"].basename(cleanPathPart) !== item.oldName) {
-                        return full;
-                    }
-                    let newPathPart = item.newName;
-                    if (cleanPathPart.includes("/") || cleanPathPart.includes("\\")) {
-                        newPathPart = cleanPathPart.replace(/[^\/\\]+$/, item.newName);
-                    }
-                    return opener + newPathPart + anchorPart + aliasPart + closer;
+                    const relPath = buildRelativeLink(note.path, item.newPath);
+                    return opener + relPath + anchorPart + aliasPart + closer;
                 });
                 let renamedCount = 0;
                 for (const item of filesToRename) {
@@ -21185,8 +21342,8 @@ class LocalImagesPlugin extends obsidian.Plugin {
                         let filedata = yield this.app.vault.read(note);
                         let changed = false;
                         for (const item of filesToRename) {
-                            const updatedMd = rewriteMdLink(filedata, item);
-                            const updatedWiki = rewriteWikiLink(updatedMd, item);
+                            const updatedMd = rewriteMdLink(filedata, note, item);
+                            const updatedWiki = rewriteWikiLink(updatedMd, note, item);
                             if (updatedWiki !== filedata) {
                                 filedata = updatedWiki;
                                 changed = true;
