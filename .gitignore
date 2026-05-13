@@ -7,8 +7,5 @@ data.json
 # Backups
 *.bak
 
-# MacOS
+# Exclude macOS Finder (System Explorer) View States
 .DS_Store
-
-# Recorded changes
-log.md
