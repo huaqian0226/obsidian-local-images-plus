@@ -1,0 +1,38 @@
+name: Reusable Obsidian Plugin Release
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Tag name for this release (must start with v)"
+        required: true
+        type: string
+      release_files:
+        description: "Newline separated list of release asset files"
+        required: false
+        type: string
+        default: |
+          main.js
+          manifest.json
+          styles.css
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag format
+        run: |
+          if [[ ! "${{ inputs.release_tag }}" =~ ^v ]]; then
+            echo "release_tag must start with 'v' (example: v0.16.5)." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ inputs.release_files }}
