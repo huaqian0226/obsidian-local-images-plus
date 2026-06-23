@@ -17,9 +17,11 @@ export class ModalW1 extends Modal {
 	onOpen() {
 		let { contentEl, titleEl } = this;
 		titleEl.setText(APP_TITLE);
-		const div = contentEl.createDiv({
+		const messageEl = contentEl.createEl("pre", {
 			text: this.messg
 		})
+		messageEl.style.whiteSpace = "pre-wrap";
+		messageEl.style.wordBreak = "break-word";
 
 
 		contentEl.createEl("button", {

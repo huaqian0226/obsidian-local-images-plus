@@ -1,138 +1,88 @@
-# Obsidian Local Images Plus
+# Local Images Plus — `my-features` fork
 
-Obsidian Local Images Plus is a plugin for [Obsidian](https://obsidian.md/) 
+> English | [简体中文](./README.zh-CN.md)
 
-***
+A personal fork of the excellent **[Local Images Plus](https://github.com/Sergei-Korneev/obsidian-local-images-plus)** plugin for [Obsidian](https://obsidian.md/), customized to fit my own vault and workflow.
 
-**By using this software, you accept all terms and agree to the [license agreement](https://github.com/Sergei-Korneev/obsidian-local-images-plus/blob/main/LICENSE).**
+The base plugin downloads/localizes external media in your notes, saves attachments locally, de-duplicates them via MD5, and removes orphaned attachments. **All of that credit goes to the original authors** (see [Acknowledgements](#acknowledgements)). This fork only adds a few quality-of-life changes on top.
 
-**The author of this software is not obligated to provide any form of support and assumes no liability.**
+> ⚠️ This fork is **not** affiliated with the original project and is **not** published to the Obsidian Community Store. It is maintained for personal use. Use at your own risk and **keep backups** — several commands modify or delete files in bulk.
 
-***
+---
 
- 
+## What this fork adds
 
-## Main features of the plugin include:
+- **Confirm-before-run for every bulk action.** Localize, orphan removal, and MD5 rename now **pre-scan**, show exactly what will be affected (per-note / per-folder counts, one item per line in a scrollable dialog), and ask for confirmation **before** touching any file.
 
-- Downloading media files from copied/pasted content of web pages
-- Localizing media files from copied/pasted content of word / Open Office documents
-- Downloading any filetypes from web
-- Saving attachments next to note in folder named after  note
-- Downloading files embedded in markdown tags from web to vault 
-- Saving base64 embedded images to vault
-- Converting PNG images to JPEG images with various quality
-- Attachments de-dulication by using MD5 hashing algorithm
-- Removing orphaned attachments from vault
+- **Localize is now folder / vault aware:**
+  - `Localize attachments (Plugin folder)` scans **every note in the current note's folder**, not just the active note.
+  - `Localize attachments (Obsidian folder)` scans the **whole vault** and honors the localize exclude list.
+  - The old third "all notes" command was merged in — there are now **2 localize commands instead of 3**.
 
+- **New — Rename attachments to MD5:**
+  - `Rename attachments to MD5 (Plugin folder)` and `Rename attachments to MD5 (Obsidian folder)` rename attachments to their MD5 signature and **rewrite note links to relative paths**.
 
+- **Smarter orphan removal:**
+  - Supports per-note sibling attachment folders (e.g. `./images`), grouping and reporting orphans **per folder**.
+  - Plugin-folder mode scans all notes that share the folder's attachment directory.
 
-## Installation
+- **Exclude-folder settings** (one path per line, in the plugin settings tab):
+  - *Excluded folders for orphan deletion*
+  - *Excluded folders for MD5 rename*
+  - *Excluded folders for localize*
 
-- Download the latest version from [GitHub](https://github.com/Sergei-Korneev/obsidian-local-images-plus) / [GitHub page](https://sergei-korneev.github.io/obsidian-local-images-plus). [Read release notes](https://github.com/Sergei-Korneev/obsidian-local-images-plus/releases).
-- Remove obsidian-local-images plugin to avoid any conflicts.
-- Extract the archive into your Obsidian vault (e.g. Myvault/.obsidian/plugins)
-- Restart Obsidian.
-- Or install from "Obsidian Community Plugins"
-- Open "Community plugins" dialog and change plugin settings at will.
-- Enjoy
+> **ℹ️ Orphan detection coverage:** before deciding what is unused, orphan detection now collects references from each note's **body embeds/links**, its **YAML frontmatter links** (e.g. `banner` / cover properties), and **canvas files** — across *every* note in scope, not just the active note. This is broader than the original (which only checked the active note's references), so it should produce fewer false positives. It is still a delete operation, so keep backups and test on a sample folder first.
 
+---
 
-## Updating
+## Commands
 
-- Update the plugin from Obsidian settings and restart Obsidian
+| Command | What it does |
+| --- | --- |
+| **Localize attachments (Plugin folder)** | Localize remote attachments for every note in the current note's folder (saves to the plugin-configured folder). |
+| **Localize attachments (Obsidian folder)** | Localize remote attachments across the whole vault (saves to the Obsidian-configured folder); respects the localize exclude list. |
+| **Remove all orphaned attachments (Plugin folder)** | Remove unused attachments in the current folder's attachment directory. |
+| **Remove all orphaned attachments (Obsidian folder)** | Remove unused attachments vault-wide; supports `./images`-style per-note folders; respects the orphan exclude list. |
+| **Rename attachments to MD5 (Plugin folder)** | Rename the current note's attachments to MD5 and rewrite references to relative paths. |
+| **Rename attachments to MD5 (Obsidian folder)** | Rename per-note attachments vault-wide to MD5; respects the MD5 exclude list. |
 
+The original utility commands are kept too (set first header as note name, convert selection to URI, convert HTML selection to Markdown).
 
-```
+---
 
-This plugin has known compatibility issues with the following plugins:
+## Install (personal fork)
 
-* Paste Image Rename
+This fork is installed manually or via BRAT, not from the Community Store.
 
-* Pretty BibTex
-
-```
-
-
-## Usage
-
-Just copy any web content, Word/Open Office content and paste it into your regular note or a note in canvas.
-
-This plugin also handles all attachments (screenshots/drag-and-drop for files/audio records).
-
-
-
-
-![img](docs/exampleimage.gif?raw=true)
-
-Use it in the command/menu mode or in automatic mode (toggle "Automatic processing" option in the settings):
-
-
-![img](docs/commands.png?raw=true)
-
-
-![img](docs/menuex.png?raw=true)
-
-
-```Localize attachments for the current note (plugin folder)``` - your active note will be processed and attachments will be saved in the folder preconfigured in the plugin settings. 
-
-or
-
-```Localize attachments for the current note (Obsidian folder)``` - your active note will be processed and attachments will be saved in the folder preconfigured in the Obsidian settings.
-
-or
-
-
-```Localize attachments for all your notes (plugin folder)``` - will be processed all the pages in your vault, that corresponds to **Include** parameter in the plugin's settings and attachments will be saved in the folder(s) preconfigured in the plugin settings.
-
-
-
-**NOTE: This plugin can change all your notes at once, so you should consider doing backups of your files periodically.**
-
-You can also insert any file e.g:
-
-```![mypdf](http://mysite/mypdf.pdf)```
-
-```![mylocalfile](file:///mylinuxdisk/mysong.mp3)```
-
-Files will be copied or downloaded to your attachments folder.
-
-![img](docs/examplepdf.gif?raw=true)
-
-**NOTE: I would not recommend to use this plugin for copying really big files, since buffered reading from disk not implemented yet.**
-
-This plugin also allows you to remove unused attachments by running commands:
-
-```Remove all orphaned attachments (Plugin folder)```
-
-and
-
-```Remove all orphaned attachments (Obsidian folder)```
-
-The first one searches orphans in the folder next to the active note, while the second one searches all unused attachments for all your notes. (this requires you to set some root subfolder in Obsidian settings)
-
-
-All attachment names are generated according to MD5, therefore they are pretty unique within the vault.        
-
-This means you can place an attachment file anywhere within your vault, replace the absolute path in a tag with the file name and Obsidian will still show it in your note.
- 
-
-
-
-## Donations
-
-Share your  wishes and ideas about this software or buy me a coffee (or hot chocolate)
-
-<a href="https://www.buymeacoffee.com/sergeikorneev" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;"></a>
-
-## Credits
-
-[niekcandaele's](https://github.com/niekcandaele/obsidian-local-images)
-
-[aleksey-rezvov](https://github.com/aleksey-rezvov/obsidian-local-images)
-
+- **BRAT (recommended):** in BRAT, *Add Beta plugin* → `huaqian0226/obsidian-local-images-plus`. Releases are tagged `<upstream>-hq.N` (current: `0.16.4-hq.2`). If you previously installed `hq.1`, remove and re-add it once so BRAT picks up `hq.2` — the old `hq.1` release reported its version as plain `0.16.4`.
+- **Manual:**
+  1. Build (see below), which outputs to `obsidian_local_images_plus_latest/`.
+  2. Copy `main.js`, `manifest.json`, and `styles.css` into `<your-vault>/.obsidian/plugins/obsidian-local-images-plus/`.
+  3. Restart Obsidian and enable the plugin in **Community plugins**.
+- To avoid conflicts, disable the original *Local Images Plus* / *obsidian-local-images* if installed.
 
 ## Build from source
+
+```bash
+npm install
+npm run build   # production build → obsidian_local_images_plus_latest/
+npm run dev     # watch / rebuild on change
 ```
-npm run build
-npm run dev
-```
+
+> Source lives in `src/*.ts`. `main.js` is generated — never edit it by hand; change the source and rebuild.
+
+---
+
+## Acknowledgements
+
+Huge thanks to **[Sergei Korneev](https://github.com/Sergei-Korneev)** and the original *Local Images Plus*, which does all the heavy lifting this fork builds on — and to the lineage it grew from:
+
+- [niekcandaele/obsidian-local-images](https://github.com/niekcandaele/obsidian-local-images)
+- [aleksey-rezvov/obsidian-local-images](https://github.com/aleksey-rezvov/obsidian-local-images)
+- [Sergei-Korneev/obsidian-local-images-plus](https://github.com/Sergei-Korneev/obsidian-local-images-plus) (author credits: *catalysm, aleksey-rezvov, Sergei Korneev*)
+
+If you find the base plugin useful, please support the original author: [Buy Me a Coffee](https://www.buymeacoffee.com/sergeikorneev).
+
+## License
+
+This fork inherits the original project's license — see [`LICENSE`](./LICENSE). All original copyright and attribution remain with the upstream authors.

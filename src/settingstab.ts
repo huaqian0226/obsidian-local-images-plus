@@ -276,6 +276,54 @@ export default class SettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
+            .setName("Excluded folders for orphan deletion")
+            .setDesc("Folders excluded from 'Remove all orphaned attachments (Obsidian folder)'. One path per line.")
+            .addTextArea(text => {
+                text
+                    .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                    .setValue(this.plugin.settings.ExcludeOrphanFoldersList)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ExcludeOrphanFoldersList = value;
+                        await this.plugin.saveSettings();
+                    });
+
+                text.inputEl.rows = 4;
+                text.inputEl.style.width = "100%";
+            });
+
+        new Setting(containerEl)
+            .setName("Excluded folders for MD5 rename")
+            .setDesc("Folders excluded from 'Rename attachments to MD5 (Obsidian folder)'. One path per line.")
+            .addTextArea(text => {
+                text
+                    .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                    .setValue(this.plugin.settings.ExcludeRenameFoldersList)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ExcludeRenameFoldersList = value;
+                        await this.plugin.saveSettings();
+                    });
+
+                text.inputEl.rows = 4;
+                text.inputEl.style.width = "100%";
+            });
+
+        new Setting(containerEl)
+            .setName("Excluded folders for localize")
+            .setDesc("Folders excluded from 'Localize attachments for all your notes'. One path per line.")
+            .addTextArea(text => {
+                text
+                    .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                    .setValue(this.plugin.settings.ExcludeLocalizeFoldersList)
+                    .onChange(async (value) => {
+                        this.plugin.settings.ExcludeLocalizeFoldersList = value;
+                        await this.plugin.saveSettings();
+                    });
+
+                text.inputEl.rows = 4;
+                text.inputEl.style.width = "100%";
+            });
+
+        new Setting(containerEl)
             .setName("Image Quality")
             .setDesc("Image quality selection (30 to 100).")
             .addText((text) =>

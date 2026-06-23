@@ -14,7 +14,6 @@ import {
   imageTagProcessor,
   getMDir,
   getRDir,
-  FrontMatterParser,
 } from "./contentProcessor"
 
 import {
@@ -29,7 +28,12 @@ import {
   pathJoin,
   blobToJpegArrayBuffer,
   getFileExt,
-  readFromDiskB
+  readFromDiskB,
+  readFromDisk,
+  normalizePath,
+  parseExcludePaths,
+  isPathInExcludedFolders,
+  countRemoteLinksInContent
 } from "./utils"
 
 import {
@@ -39,7 +43,6 @@ import {
   MD_SEARCH_PATTERN,
   NOTICE_TIMEOUT,
   TIMEOUT_LIKE_INFINITY,
-  FRONTMATTER_SEARCH_PATTERN,
   TIME_DIFF
 } from "./config"
 
@@ -55,6 +58,14 @@ const fs = require('fs').promises;
 
 
 //import { count, log } from "console"
+
+interface RenamePlanItem {
+  oldPath: string
+  newPath: string
+  oldName: string
+  newName: string
+}
+
 
 export default class LocalImagesPlugin extends Plugin {
   settings: ISettings
@@ -74,15 +85,15 @@ export default class LocalImagesPlugin extends Plugin {
 
     this.addCommand({
       id: "download-images",
-      name: "Localize attachments for the current note (plugin folder)",
+      name: "Localize attachments (Plugin folder)",
       callback: this.processActivePage(false),
     })
 
 
     this.addCommand({
       id: "download-images-def",
-      name: "Localize attachments for the current note (Obsidian folder)",
-      callback: this.processActivePage(true),
+      name: "Localize attachments (Obsidian folder)",
+      callback: this.openProcessAllModal,
     })
 
     if (!this.settings.disAddCom) {
@@ -95,12 +106,6 @@ export default class LocalImagesPlugin extends Plugin {
         id: "set-title-as-name",
         name: "Set the first found # header as a note name.",
         callback: this.setTitleAsName,
-      })
-
-      this.addCommand({
-        id: "download-images-all",
-        name: "Localize attachments for all your notes (plugin folder)",
-        callback: this.openProcessAllModal,
       })
 
       this.addCommand({
@@ -125,6 +130,18 @@ export default class LocalImagesPlugin extends Plugin {
         id: "remove-orphans-from-plugin-folder",
         name: "Remove all orphaned attachments (Plugin folder)",
         callback: () => { this.removeOrphans("plugin")() },
+      })
+
+      this.addCommand({
+        id: "rename-attachments-md5-plugin",
+        name: "Rename attachments to MD5 (Plugin folder)",
+        callback: () => { this.renameMD5("plugin")() },
+      })
+
+      this.addCommand({
+        id: "rename-attachments-md5-obsidian",
+        name: "Rename attachments to MD5 (Obsidian folder)",
+        callback: () => { this.renameMD5("obsidian")() },
       })
     }
 
@@ -373,7 +390,50 @@ export default class LocalImagesPlugin extends Plugin {
     logError("processActivePage")
     try {
       const activeFile = this.getCurrentNote()
-      await this.processPage(activeFile, defaultdir)
+      if (!activeFile) {
+        showBalloon("Please select a note or click inside selected note in canvas.", this.settings.showNotifications)
+        return
+      }
+      if (!this.ExemplaryOfMD(activeFile.path)) {
+        showBalloon("Please, select a markdown note first.", this.settings.showNotifications)
+        return
+      }
+      const noteParentPath = path.dirname(activeFile.path)
+      const excludeLocalizePaths = parseExcludePaths(this.settings.ExcludeLocalizeFoldersList)
+      if (isPathInExcludedFolders(noteParentPath, excludeLocalizePaths)) {
+        showBalloon("This folder is excluded from localize.", this.settings.showNotifications)
+        return
+      }
+      // Folder-level scan: every markdown note that shares the active note's folder.
+      const files = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && path.dirname(f.path) === noteParentPath)
+      const noteList: Array<{ file: TFile, matchCount: number }> = []
+      for (const file of files) {
+        const content = await this.app.vault.cachedRead(file)
+        const matchCount = countRemoteLinksInContent(content)
+        if (matchCount > 0)
+          noteList.push({ file, matchCount })
+      }
+      if (noteList.length == 0) {
+        showBalloon("No remote attachments found in \"" + noteParentPath + "\" — nothing to localize.", this.settings.showNotifications)
+        return
+      }
+      noteList.sort((a, b) => a.file.path.localeCompare(b.file.path))
+      const totalLinks = noteList.reduce((s, n) => s + n.matchCount, 0)
+      let detail = ""
+      for (const { file, matchCount } of noteList) {
+        detail += "\r\n  " + file.path + "  →  " + matchCount + " link(s)"
+      }
+      const mod = new ModalW1(this.app)
+      mod.messg = "Localize " + totalLinks + " remote link(s) across " + noteList.length + " note(s) in folder:\r\n  " + noteParentPath + detail + "\r\n      "
+      mod.plugin = this
+      const filesToProcess = noteList.map(x => x.file)
+      const _dd = defaultdir
+      mod.callbackFunc = async () => {
+        for (const file of filesToProcess) {
+          await this.processPage(file, _dd)
+        }
+      }
+      mod.open()
     } catch (e) {
       showBalloon(`Please select a note or click inside selected note in canvas.`, this.settings.showNotifications)
       return
@@ -477,252 +537,600 @@ export default class LocalImagesPlugin extends Plugin {
 
   private removeOrphans = (type: string = undefined, filesToRemove: Array<TFile> = undefined, noteFile: TFile = undefined) => async () => {
 
-      const obsmediadir = app.vault.getConfig("attachmentFolderPath")
-      const allFiles = this.app.vault.getFiles()
-      let oldRootdir = this.settings.mediaRootDir
+    const obsmediadir = app.vault.getConfig("attachmentFolderPath")
+    const allFiles = this.app.vault.getFiles()
 
-      if (type == "plugin") {
-        let orphanedAttachments = []
-        let allAttachmentsLinks = []
-        if (this.settings.saveAttE != "nextToNoteS" ||
-          !path.basename(oldRootdir).endsWith("${notename}") ||
-          oldRootdir.includes("${date}")) {
-          showBalloon("This command requires the settings 'Next to note in the folder specified below' and pattern '${notename}' at the end to be enabled, also the path cannot contain ${date} pattern.\nPlease, change settings first!\r\n", this.settings.showNotifications)
-          return
-        }
-         
-        if (!noteFile) {
-          noteFile = this.getCurrentNote()
-          if (!noteFile) {
-            showBalloon("Please, select a note or click inside a note in canvas!", this.settings.showNotifications)
-            return
-          }
+    const excludeOrphanPaths = parseExcludePaths(this.settings.ExcludeOrphanFoldersList)
+    const isOrphanExcluded = (p: string) => isPathInExcludedFolders(p, excludeOrphanPaths)
 
-        }
-
-
-        if (this.ExemplaryOfMD(noteFile.path)) {
-
-          oldRootdir = oldRootdir.replace("${notename}", path.parse(noteFile.path)?.name)
-          oldRootdir = trimAny(pathJoin([path.parse(noteFile.path)?.dir, oldRootdir]), ["\/"])
-          if (! await this.app.vault.exists(oldRootdir)) {
-            showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications)
-            return
-          }
-          const allAttachments = await this.app.vault.getAbstractFileByPath(oldRootdir)?.children
-          const metaCache = this.app.metadataCache.getFileCache(noteFile)
-          const embeds = metaCache?.embeds
-          const links = metaCache?.links
-          const frembeds = await FrontMatterParser(this, noteFile, FRONTMATTER_SEARCH_PATTERN);
- 
- 
-          if (frembeds.files?.length > 0) {
-            for (const frembed of frembeds.files) {
-              allAttachmentsLinks.push(frembed.link);
-              console.log(frembed.link);
-            }
-          }
-          if (embeds) {
-            for (const embed of embeds) {
-              allAttachmentsLinks.push(path.basename(embed.link))
-            }
-          }
-          if (links) {
-            for (const link of links) {
-              allAttachmentsLinks.push(path.basename(link.link))
-            }
-          }
-          if (allAttachments) {
-            for (const attach of allAttachments) {
-              if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined ) {
-                logError("orph: " + attach.basename)
-                orphanedAttachments.push(attach)
-              }
-            }
-          }
-
-
-          if (orphanedAttachments.length > 0) {
-            const mod = new ModalW1(this.app)
-            mod.messg = "Confirm remove " + orphanedAttachments.length + " orphan(s) from '" + oldRootdir + "'\r\n\r\n      "
-            mod.plugin = this
-            mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
-            mod.open()
-          } else {
-            showBalloon("No orphaned files found!", this.settings.showNotifications)
-          }
-
-        }
-
-
+    // Push the basename of a link into a bucket, stripping #headings and ?queries.
+    const collectBasename = (bucket: Array<string>, linkValue: string) => {
+      if (!linkValue) {
+        return
       }
+      const cleanPath = String(linkValue).split("#")[0].split("?")[0]
+      const basename = path.basename(cleanPath)
+      if (basename.length > 0) {
+        bucket.push(basename)
+      }
+    }
 
-
-
-      if (type == "obsidian") {
-
-        if (obsmediadir.slice(0, 2) == "./" || obsmediadir == "/") {
-          showBalloon("This command cannot run on vault's root or on subfolder next to note!\nPlease, change settings first!\r\n", this.settings.showNotifications)
+    // Collect every attachment link a note/canvas references and feed each to pushLink.
+    const collectFileLinks = async (file: TFile, pushLink: (link: string) => void) => {
+      if (!file) {
+        return
+      }
+      if (this.ExemplaryOfCANVAS(file.path)) {
+        let canvasData
+        try {
+          canvasData = JSON.parse(await app.vault.cachedRead(file))
+        } catch (e) {
           return
         }
-
-        const allAttachments = this.app.vault.getAbstractFileByPath(obsmediadir)?.children
-        let orphanedAttachments = []
-        let allAttachmentsLinks = []
-        
-        
- 
-        if (allFiles) {
-
-          for (const file of allFiles) {
-            
-            //Fix for canvas files
-            if (file !== null && this.ExemplaryOfCANVAS(file.path)){
-             logError(file) 
-              
-             logError(this.app.metadataCache.getCache(file.path))
-              
-   
-              let canvasData
-              try {
-                canvasData = JSON.parse(await app.vault.cachedRead(file))
-              } catch (e) {
-                logError("Parse canvas data error")  
+        if (canvasData.nodes && canvasData.nodes.length > 0) {
+          for (const node of canvasData.nodes) {
+            if (node.type === "file") {
+              pushLink(node.file)
+            } else if (node.type == "text") {
+              //https://github.com/Fevol/obsidian-typings
+              //Undocumented API, may be altered in the future
+              const parsedNodeLinks = await this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text)
+              const allNodeLinks = parsedNodeLinks?.links
+              if (allNodeLinks === undefined) {
                 continue
               }
-               
-              if (canvasData.nodes && canvasData.nodes.length > 0) {
-                for (const node of canvasData.nodes) {
-                  
-                  logError(node)
-                    
-                  if (node.type === "file") {
-                    
-                    logError("file json")
-                    
-                    allAttachmentsLinks.push(path.basename(node.file))
-                    
-                  } else if (node.type == "text") {
-                    
-                    logError("text json")
-                   
-                    //https://github.com/Fevol/obsidian-typings
-                    //Undocumented API, may be altered in the future
-                    const AllNodeLinks = (await this.app.internalPlugins.plugins.canvas.instance.index.parseText(node.text))?.links;
- 
-                    logError(AllNodeLinks)
- 
-                    if (AllNodeLinks === undefined){continue}
-
-                    for (const Nodelink of AllNodeLinks) {
-                      allAttachmentsLinks.push(path.basename(Nodelink.link))
-                    }
-                  }
-                }
+              for (const nodeLink of allNodeLinks) {
+                pushLink(nodeLink.link)
               }
-            
-      
-
-            }
-
-          if (file !== null && this.ExemplaryOfMD(file.path)){
-
-    
-              const metaCache = this.app.metadataCache.getCache(file.path)
-              const embeds = metaCache?.embeds
-              const links = metaCache?.links
-              logError(embeds)
-              logError(links)
-
-
-              if (embeds) {
-                for (const embed of embeds) {
-                  allAttachmentsLinks.push(path.basename(embed.link))
-                }
-              }
-              if (links) {
-                for (const link of links) {
-                  allAttachmentsLinks.push(path.basename(link.link))
-                }
-              }
-            
-
-          }
-        }
-
-          for (const attach of allAttachments) {
-            if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined ) {
-              logError(allAttachmentsLinks)
-              logError(attach.name)
-              logError("orph: " + attach.name)
-              orphanedAttachments.push(attach)
             }
           }
-
         }
+      }
+      if (this.ExemplaryOfMD(file.path)) {
+        const metaCache = this.app.metadataCache.getCache(file.path)
+        const embeds = metaCache?.embeds
+        const links = metaCache?.links
+        // frontmatterLinks: attachments referenced in YAML frontmatter (e.g. banner/cover
+        // properties). Not in the pinned obsidian.d.ts stub but present at runtime (Obsidian 1.4+),
+        // so read it via an any-cast to avoid flagging such attachments as orphans.
+        const frontmatterLinks = (metaCache as any)?.frontmatterLinks
+        if (embeds) {
+          for (const embed of embeds) {
+            pushLink(embed.link)
+          }
+        }
+        if (links) {
+          for (const link of links) {
+            pushLink(link.link)
+          }
+        }
+        if (frontmatterLinks) {
+          for (const fmLink of frontmatterLinks) {
+            pushLink(fmLink.link)
+          }
+        }
+      }
+    }
 
+    if (type == "plugin") {
+      let orphanedAttachments = []
+      let allAttachmentsLinks: Array<string> = []
 
-        logError("Orphaned: ")
-        logError(orphanedAttachments, true)
+      if (!noteFile) {
+        noteFile = this.getCurrentNote()
+        if (!noteFile) {
+          showBalloon("Please, select a note or click inside a note in canvas!", this.settings.showNotifications)
+          return
+        }
+      }
+
+      if (this.ExemplaryOfMD(noteFile.path)) {
+        const noteParentPath = (noteFile.parent && noteFile.parent.path) ? noteFile.parent.path : ""
+        if (isOrphanExcluded(noteParentPath)) {
+          showBalloon("This note folder is excluded from orphan deletion.", this.settings.showNotifications)
+          return
+        }
+        // Use the note's actual attachment dir (handles ./images and ${notename} alike).
+        const oldRootdir = await getMDir(this.app, noteFile, this.settings)
+        if (! await this.app.vault.exists(oldRootdir)) {
+          showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications)
+          return
+        }
+        const attachFolder: any = this.app.vault.getAbstractFileByPath(oldRootdir)
+        const allAttachments = attachFolder?.children || []
+        // Folder-level: collect links from every note/canvas sharing this folder.
+        for (const file of allFiles) {
+          const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
+          if (parentPath !== noteParentPath || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+            continue
+          }
+          await collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue))
+        }
+        for (const attach of allAttachments) {
+          if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
+            logError("orph: " + attach.basename)
+            orphanedAttachments.push(attach)
+          }
+        }
         if (orphanedAttachments.length > 0) {
           const mod = new ModalW1(this.app)
-          mod.messg = "Confirm remove " + orphanedAttachments.length + " orphan(s) from '" + obsmediadir + "  '\r\n \
-          NOTE: Be careful when running this command on Obsidian attachments folder, since some html-linked files may also be moved.\r\n      "
+          mod.messg = "Confirm remove orphaned attachments:\r\n  " + oldRootdir + "  →  " + orphanedAttachments.length + " file(s)\r\n      "
           mod.plugin = this
           mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
           mod.open()
         } else {
           showBalloon("No orphaned files found!", this.settings.showNotifications)
         }
+      }
+    }
 
-
-
-
+    if (type == "obsidian") {
+      if (obsmediadir == "/") {
+        showBalloon("This command cannot run on vault root.\nPlease, change settings first!\r\n", this.settings.showNotifications)
+        return
       }
 
-
-      if (type == "execremove") {
-        const useSysTrash = (this.app.vault.getConfig("trashOption") === "system")
-        const remcompl = this.settings.removeOrphansCompl
-        let msg = "";
-
-        if (filesToRemove) {
-
-          filesToRemove.forEach((el: TFile) => {
-
-            if (remcompl) {
-              msg = "were deleted completely."
-              this.app.vault.delete(el, true)
-            } else {
-              if (useSysTrash) {
-                msg = "were moved to the system garbage can."
-              } else {
-                msg = "were moved to the Obsidian garbage can."
-              }
-              this.app.vault.trash(el, useSysTrash)
-            }
-
-          })
+      if (obsmediadir.slice(0, 2) == "./") {
+        // Per-note sibling attachment dir (e.g. "./images"): scan folder-by-folder.
+        const subfolderName = obsmediadir.slice(2)
+        if (!subfolderName.length) {
+          showBalloon("Invalid Obsidian attachment folder path.\r\n", this.settings.showNotifications)
+          return
         }
-
-        showBalloon(filesToRemove.length + " file(s) " + msg, this.settings.showNotifications)
-
+        const usedByParentFolder = new Map<string, Set<string>>()
+        const addFolderUsage = (parentPath: string, linkValue: string) => {
+          if (!linkValue) {
+            return
+          }
+          const cleanPath = String(linkValue).split("#")[0].split("?")[0]
+          const baseName = path.basename(cleanPath)
+          if (!baseName.length) {
+            return
+          }
+          if (!usedByParentFolder.has(parentPath)) {
+            usedByParentFolder.set(parentPath, new Set())
+          }
+          usedByParentFolder.get(parentPath).add(baseName)
+        }
+        for (const file of allFiles) {
+          const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
+          if (isOrphanExcluded(parentPath)) {
+            continue
+          }
+          if (!file || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+            continue
+          }
+          await collectFileLinks(file, (linkValue) => addFolderUsage(parentPath, linkValue))
+        }
+        const scannedFolders = new Set<string>()
+        let orphanedAttachments = []
+        const folderCounts = new Map<string, number>()
+        for (const file of allFiles) {
+          if (!(file && this.ExemplaryOfMD(file.path))) {
+            continue
+          }
+          const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
+          if (isOrphanExcluded(parentPath)) {
+            continue
+          }
+          const attachFolderPath = parentPath ? parentPath + "/" + subfolderName : subfolderName
+          if (scannedFolders.has(attachFolderPath)) {
+            continue
+          }
+          scannedFolders.add(attachFolderPath)
+          const attachFolder: any = this.app.vault.getAbstractFileByPath(attachFolderPath)
+          if (!(attachFolder && attachFolder.children)) {
+            continue
+          }
+          const usedSet = usedByParentFolder.get(parentPath) || new Set()
+          let folderOrphanCount = 0
+          for (const attach of attachFolder.children) {
+            if (attach.children != undefined) {
+              continue
+            }
+            if (!usedSet.has(attach.name)) {
+              orphanedAttachments.push(attach)
+              folderOrphanCount++
+            }
+          }
+          if (folderOrphanCount > 0) {
+            folderCounts.set(attachFolderPath, folderOrphanCount)
+          }
+        }
+        if (orphanedAttachments.length > 0) {
+          let detail = ""
+          for (const [p, cnt] of Array.from(folderCounts.entries()).sort()) {
+            detail += "\r\n  " + p + "  →  " + cnt + " file(s)"
+          }
+          const mod = new ModalW1(this.app)
+          mod.messg = "Confirm remove orphaned attachments:" + detail + "\r\n      "
+          mod.plugin = this
+          mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
+          mod.open()
+        } else {
+          showBalloon("No orphaned files found!", this.settings.showNotifications)
+        }
+      } else {
+        // Fixed global attachment folder.
+        const attachFolder: any = this.app.vault.getAbstractFileByPath(obsmediadir)
+        const allAttachments = attachFolder?.children || []
+        let orphanedAttachments = []
+        let allAttachmentsLinks: Array<string> = []
+        for (const file of allFiles) {
+          const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
+          if (isOrphanExcluded(parentPath)) {
+            continue
+          }
+          if (!file || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+            continue
+          }
+          await collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue))
+        }
+        for (const attach of allAttachments) {
+          if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
+            logError(allAttachmentsLinks)
+            logError(attach.name)
+            logError("orph: " + attach.name)
+            orphanedAttachments.push(attach)
+          }
+        }
+        logError("Orphaned: ")
+        logError(orphanedAttachments, true)
+        if (orphanedAttachments.length > 0) {
+          const mod = new ModalW1(this.app)
+          mod.messg = "Confirm remove orphaned attachments:\r\n  " + obsmediadir + "  →  " + orphanedAttachments.length + " file(s)\r\n  NOTE: Be careful when running this command on Obsidian attachments folder, since some html-linked files may also be moved.\r\n      "
+          mod.plugin = this
+          mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
+          mod.open()
+        } else {
+          showBalloon("No orphaned files found!", this.settings.showNotifications)
+        }
       }
+    }
+
+    if (type == "execremove") {
+      const useSysTrash = (this.app.vault.getConfig("trashOption") === "system")
+      const remcompl = this.settings.removeOrphansCompl
+      let msg = "";
+
+      if (filesToRemove) {
+
+        filesToRemove.forEach((el: TFile) => {
+
+          if (remcompl) {
+            msg = "were deleted completely."
+            this.app.vault.delete(el, true)
+          } else {
+            if (useSysTrash) {
+              msg = "were moved to the system garbage can."
+            } else {
+              msg = "were moved to the Obsidian garbage can."
+            }
+            this.app.vault.trash(el, useSysTrash)
+          }
+
+        })
+      }
+
+      showBalloon(filesToRemove.length + " file(s) " + msg, this.settings.showNotifications)
 
     }
 
+  }
 
 
 
-  private openProcessAllModal = () => {
+
+  private openProcessAllModal = async () => {
+    const excludeLocalizePaths = parseExcludePaths(this.settings.ExcludeLocalizeFoldersList)
+    const files = this.app.vault.getMarkdownFiles().filter(f => this.ExemplaryOfMD(f.path) && !isPathInExcludedFolders(path.dirname(f.path), excludeLocalizePaths))
+    const noteList: Array<{ file: TFile, matchCount: number }> = []
+    for (const file of files) {
+      const content = await this.app.vault.cachedRead(file)
+      const matchCount = countRemoteLinksInContent(content)
+      if (matchCount > 0) {
+        noteList.push({ file, matchCount })
+      }
+    }
+    if (noteList.length == 0) {
+      showBalloon("No remote attachments found across all notes — nothing to localize.", this.settings.showNotifications)
+      return
+    }
+    noteList.sort((a, b) => a.file.path.localeCompare(b.file.path))
+    const totalLinks = noteList.reduce((s, n) => s + n.matchCount, 0)
+    let detail = ""
+    for (const { file, matchCount } of noteList) {
+      detail += "\r\n  " + file.path + "  →  " + matchCount + " link(s)"
+    }
     const mod = new ModalW1(this.app)
-    mod.messg = "Confirm processing all pages.\r\n "
+    mod.messg = "Localize " + totalLinks + " remote link(s) across " + noteList.length + " note(s)" + detail + "\r\n      "
     mod.plugin = this
-    mod.callbackFunc = this.processAllPages
+    const filesToProcess = noteList.map(x => x.file)
+    mod.callbackFunc = async () => {
+      for (const file of filesToProcess) {
+        await this.processPage(file, true)
+      }
+    }
     mod.open()
   }
- 
 
+
+  // Rename attachments to their MD5 signature and rewrite note references to relative paths.
+  private renameMD5 = (type: string, filesToRename: Array<RenamePlanItem> = undefined, notesToUpdate: Array<TFile> = undefined) => async () => {
+    const obsmediadir = app.vault.getConfig("attachmentFolderPath")
+
+    if (type == "plugin") {
+      let oldRootdir = this.settings.mediaRootDir
+      if (this.settings.saveAttE === "obsFolder") {
+        if (obsmediadir.slice(0, 2) === "./") {
+          oldRootdir = obsmediadir.slice(2)
+        } else {
+          showBalloon("This command requires a per-note attachment path (e.g. './images').\nUse 'Rename attachments to MD5 (Obsidian folder)' for global folders.\r\n", this.settings.showNotifications)
+          return
+        }
+      }
+      if (oldRootdir.includes("${date}")) {
+        showBalloon("Path pattern cannot contain ${date}.\nPlease change the mediaRootDir setting.\r\n", this.settings.showNotifications)
+        return
+      }
+      const noteFile = this.getCurrentNote()
+      if (!noteFile) {
+        showBalloon("Please, select a note or click inside a note in canvas!", this.settings.showNotifications)
+        return
+      }
+      if (this.ExemplaryOfMD(noteFile.path)) {
+        oldRootdir = oldRootdir.replace("${notename}", path.parse(noteFile.path)?.name)
+        oldRootdir = trimAny(pathJoin([path.parse(noteFile.path)?.dir, oldRootdir]), ["\/"])
+        if (! await this.app.vault.exists(oldRootdir)) {
+          showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications)
+          return
+        }
+        const attachFolder: any = this.app.vault.getAbstractFileByPath(oldRootdir)
+        const allFolderFiles = attachFolder?.children || []
+        const noteDir = path.dirname(noteFile.path)
+        const allVaultFiles = this.app.vault.getFiles()
+        const siblingNotes = allVaultFiles.filter(f => this.ExemplaryOfMD(f.path) && path.dirname(f.path) === noteDir)
+        const planRename: Array<RenamePlanItem> = []
+        for (const f of allFolderFiles) {
+          if (f.children != undefined) {
+            continue
+          }
+          const ext = path.extname(f.name)
+          if (path.basename(f.name, ext).endsWith("_MD5")) {
+            continue
+          }
+          const binData = await readFromDisk(pathJoin([this.app.vault.adapter.basePath, f.path]))
+          if (!binData) {
+            continue
+          }
+          const newBaseName = md5Sig(binData)
+          if (!newBaseName) {
+            continue
+          }
+          const newName = newBaseName + ext
+          if (newName === f.name) {
+            continue
+          }
+          const newPath = pathJoin([oldRootdir, newName])
+          if (await this.app.vault.adapter.exists(newPath)) {
+            continue
+          }
+          planRename.push({ oldPath: f.path, newPath, oldName: f.name, newName })
+        }
+        if (planRename.length == 0) {
+          showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
+          return
+        }
+        const mod = new ModalW1(this.app)
+        mod.messg = "Confirm MD5 rename:\r\n  " + oldRootdir + "  →  " + planRename.length + " file(s)\r\n  Notes to update  →  " + siblingNotes.length + "\r\n      "
+        mod.plugin = this
+        mod.callbackFunc = this.renameMD5("execrename", planRename, siblingNotes)
+        mod.open()
+      }
+    }
+
+    if (type == "obsidian") {
+      if (obsmediadir.slice(0, 2) !== "./") {
+        showBalloon("This command requires a per-note attachment path (e.g. './images').\r\n", this.settings.showNotifications)
+        return
+      }
+      const subfolderName = obsmediadir.slice(2)
+      const excludeRenamePaths = parseExcludePaths(this.settings.ExcludeRenameFoldersList)
+      const allVaultFiles = this.app.vault.getFiles()
+      const dirMap = new Map<string, { notes: Array<TFile>, sub: any }>()
+      for (const file of allVaultFiles) {
+        if (!file || !this.ExemplaryOfMD(file.path)) {
+          continue
+        }
+        const parentPath = path.dirname(file.path)
+        if (isPathInExcludedFolders(parentPath, excludeRenamePaths)) {
+          continue
+        }
+        if (!dirMap.has(parentPath)) {
+          const subPath = parentPath ? parentPath + "/" + subfolderName : subfolderName
+          const sub: any = this.app.vault.getAbstractFileByPath(subPath)
+          if (sub && sub.children) {
+            dirMap.set(parentPath, { notes: [], sub })
+          }
+        }
+        if (dirMap.has(parentPath)) {
+          dirMap.get(parentPath).notes.push(file)
+        }
+      }
+      const planRename: Array<RenamePlanItem> = []
+      const folderCounts = new Map<string, number>()
+      const allNotesToUpdate: Array<TFile> = []
+      for (const [parentPath, entry] of dirMap) {
+        const notes = entry.notes
+        const sub = entry.sub
+        const folderPlan: Array<string> = []
+        for (const f of sub.children) {
+          if (f.children != undefined) {
+            continue
+          }
+          const ext = path.extname(f.name)
+          if (path.basename(f.name, ext).endsWith("_MD5")) {
+            continue
+          }
+          const binData = await readFromDisk(pathJoin([this.app.vault.adapter.basePath, f.path]))
+          if (!binData) {
+            continue
+          }
+          const newBaseName = md5Sig(binData)
+          if (!newBaseName) {
+            continue
+          }
+          const newName = newBaseName + ext
+          if (newName === f.name) {
+            continue
+          }
+          const newPath = pathJoin([sub.path, newName])
+          if (await this.app.vault.adapter.exists(newPath)) {
+            continue
+          }
+          planRename.push({ oldPath: f.path, newPath, oldName: f.name, newName })
+          folderPlan.push(f.name)
+        }
+        if (folderPlan.length > 0) {
+          folderCounts.set(parentPath, folderPlan.length)
+          for (const n of notes) {
+            if (!allNotesToUpdate.includes(n)) {
+              allNotesToUpdate.push(n)
+            }
+          }
+        }
+      }
+      if (planRename.length == 0) {
+        showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
+        return
+      }
+      let detail = ""
+      for (const [p, cnt] of Array.from(folderCounts.entries()).sort()) {
+        detail += "\r\n  " + (p || "(vault root)") + "/" + subfolderName + "/  →  " + cnt + " file(s)"
+      }
+      const mod = new ModalW1(this.app)
+      mod.messg = "Rename " + planRename.length + " attachment(s) to MD5 format (" + dirMap.size + " folder(s) scanned)" + detail + "\r\n      "
+      mod.plugin = this
+      mod.callbackFunc = this.renameMD5("execrename", planRename, allNotesToUpdate)
+      mod.open()
+    }
+
+    if (type == "execrename") {
+      const normalizeVaultPath = (p: string) => trimAny(normalizePath(String(p || "")), ["\/"])
+      const resolveLinkToVaultPath = (notePath: string, linkPath: string) => {
+        if (!linkPath) {
+          return ""
+        }
+        let decoded = String(linkPath)
+        try {
+          decoded = decodeURI(decoded)
+        } catch (e) {
+        }
+        decoded = decoded.trim().replace(/^<|>$/g, "")
+        if (!decoded || /^(https?:|data:|file:|mailto:)/i.test(decoded)) {
+          return ""
+        }
+        const pathPart = decoded.split("#")[0].split("?")[0]
+        if (!pathPart) {
+          return ""
+        }
+        if (pathPart.startsWith("/")) {
+          return normalizeVaultPath(pathPart.slice(1))
+        }
+        const noteDir = normalizeVaultPath(path.dirname(notePath))
+        return normalizeVaultPath(pathJoin([noteDir, pathPart]))
+      }
+      const buildRelativeLink = (notePath: string, targetPath: string) => {
+        const noteDir = normalizeVaultPath(path.dirname(notePath))
+        const normalizedTargetPath = normalizeVaultPath(targetPath)
+        const relPath = path.relative(path.sep + noteDir, path.sep + normalizedTargetPath)
+        const normalizedRelPath = relPath && relPath.length > 0
+          ? relPath
+          : path.basename(normalizedTargetPath)
+        return normalizePath(normalizedRelPath)
+      }
+      const rewriteMdLink = (content: string, note: TFile, item: RenamePlanItem) => content.replace(/(!?\[[^\]]*?\]\()([^)]+)(\))/g, (full, prefix, target, suffix) => {
+        const trimmedTarget = String(target).trim()
+        if (!trimmedTarget.length) {
+          return full
+        }
+        const wsIndex = trimmedTarget.search(/\s/)
+        const rawLinkPart = wsIndex === -1 ? trimmedTarget : trimmedTarget.slice(0, wsIndex)
+        const trailingPart = wsIndex === -1 ? "" : trimmedTarget.slice(wsIndex)
+        const rawLinkClean = rawLinkPart.replace(/^<|>$/g, "")
+        const resolvedPath = resolveLinkToVaultPath(note.path, rawLinkClean)
+        const oldPath = normalizeVaultPath(item.oldPath)
+        const basePathPart = rawLinkClean.split("#")[0].split("?")[0]
+        const baseNameOnlyMatch = path.basename(basePathPart) === item.oldName &&
+          !basePathPart.includes("/") &&
+          !basePathPart.includes("\\")
+        if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
+          return full
+        }
+        const suffixMatch = rawLinkClean.match(/([?#].*)$/)
+        const relPath = buildRelativeLink(note.path, item.newPath) + (suffixMatch ? suffixMatch[1] : "")
+        const wrappedRelPath = rawLinkPart.startsWith("<") && rawLinkPart.endsWith(">")
+          ? "<" + encodeURI(relPath) + ">"
+          : encodeURI(relPath)
+        return prefix + wrappedRelPath + trailingPart + suffix
+      })
+      const rewriteWikiLink = (content: string, note: TFile, item: RenamePlanItem) => content.replace(/(\!\[\[|\[\[)([^\]]+)(\]\])/g, (full, opener, inner, closer) => {
+        let pathPart = String(inner)
+        let aliasPart = ""
+        let anchorPart = ""
+        const pipeIndex = pathPart.indexOf("|")
+        if (pipeIndex !== -1) {
+          aliasPart = pathPart.slice(pipeIndex)
+          pathPart = pathPart.slice(0, pipeIndex)
+        }
+        const hashIndex = pathPart.indexOf("#")
+        if (hashIndex !== -1) {
+          anchorPart = pathPart.slice(hashIndex)
+          pathPart = pathPart.slice(0, hashIndex)
+        }
+        const cleanPathPart = pathPart.trim()
+        const resolvedPath = resolveLinkToVaultPath(note.path, cleanPathPart)
+        const oldPath = normalizeVaultPath(item.oldPath)
+        const baseNameOnlyMatch = path.basename(cleanPathPart) === item.oldName &&
+          !cleanPathPart.includes("/") &&
+          !cleanPathPart.includes("\\")
+        if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
+          return full
+        }
+        const relPath = buildRelativeLink(note.path, item.newPath)
+        return opener + relPath + anchorPart + aliasPart + closer
+      })
+      let renamedCount = 0
+      for (const item of filesToRename) {
+        try {
+          await this.app.vault.adapter.rename(item.oldPath, item.newPath)
+          renamedCount++
+        } catch (e) {
+          logError("Rename to MD5 failed: " + e)
+        }
+      }
+      for (const note of notesToUpdate) {
+        try {
+          let filedata = await this.app.vault.read(note)
+          let changed = false
+          for (const item of filesToRename) {
+            const updatedMd = rewriteMdLink(filedata, note, item)
+            const updatedWiki = rewriteWikiLink(updatedMd, note, item)
+            if (updatedWiki !== filedata) {
+              filedata = updatedWiki
+              changed = true
+            }
+          }
+          if (changed) {
+            await this.app.vault.modify(note, filedata)
+          }
+        } catch (e) {
+          logError("Update note refs failed: " + e)
+        }
+      }
+      showBalloon(renamedCount + " attachment(s) renamed to MD5 format.", this.settings.showNotifications)
+    }
+  }
 
 
   private async onMdCreateFunc(file: TFile) {

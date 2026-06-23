@@ -9,6 +9,7 @@ import fs from "fs";
 import {
   FORBIDDEN_SYMBOLS_FILENAME_PATTERN,
   MD_LINK,
+  MD_SEARCH_PATTERN,
   USER_AGENT,
   NOTICE_TIMEOUT,
   APP_TITLE,
@@ -336,6 +337,35 @@ export function pathJoin(parts: Array<string>): string {
 
 export function normalizePath(path: string) {
   return path.replace(/\\/g, "/");
+}
+
+
+// Split a newline-separated textarea value into a clean list of folder paths
+// (trimmed, leading/trailing slashes removed, empty lines dropped).
+export function parseExcludePaths(rawValue: string = ""): Array<string> {
+  return String(rawValue || "")
+    .split(/\r?\n|\r|\n/g)
+    .map((p) => p.trim().replace(/^\/|\/$/g, ""))
+    .filter((p) => p.length > 0);
+}
+
+// True if pathValue is one of the excluded folders or sits inside one of them.
+export function isPathInExcludedFolders(pathValue: string, excludePaths: Array<string>): boolean {
+  const p = String(pathValue || "");
+  return excludePaths.some((ex) => p === ex || p.startsWith(ex + "/"));
+}
+
+// Count how many remote (http/data) attachment links a note's content holds,
+// using the same patterns the localizer uses.
+export function countRemoteLinksInContent(content: string = ""): number {
+  let matchCount = 0;
+  for (const reg_p of MD_SEARCH_PATTERN) {
+    const m = String(content).match(new RegExp(reg_p.source, reg_p.flags));
+    if (m) {
+      matchCount += m.length;
+    }
+  }
+  return matchCount;
 }
 
 export function encObsURI(e: string) {
