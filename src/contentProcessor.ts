@@ -1,12 +1,6 @@
 import { URL } from "url";
 import path from "path";
-import {
-  App,
-  DataAdapter,
-  TFile,
-  Plugin
-} from "obsidian";
-
+import { App, DataAdapter, TFile, Plugin } from "obsidian";
 
 import {
   isUrl,
@@ -15,85 +9,127 @@ import {
   cFileName,
   logError,
   trimAny,
+  CtagsBrcks,
+  CtagsWhS,
   pathJoin,
   normalizePath,
   base64ToBuff,
   md5Sig,
   getFileExt,
-  blobToJpegArrayBuffer
+  blobToJpegArrayBuffer,
+  trimTags,
+  showBalloon,
+  renderNameTemplate,
+  resolveUniqueName,
+  FileNameCtx,
 } from "./utils";
+import { translate } from "./i18n/index";
 
 import {
   ISettings,
-  SUPPORTED_OS
+  SUPPORTED_OS,
+  ATT_SIZE_ACHOR,
+  MD_LINK,
+  URL_PATTERN,
+  NOTICE_TIMEOUT,
 } from "./config";
-
 
 import AsyncLock from "async-lock";
 import moment from "moment";
 
-export function imageTagProcessor(app: Plugin,
+export function imageTagProcessor(
+  app: Plugin,
   noteFile: TFile,
   settings: ISettings,
-  defaultdir: boolean
+  defaultdir: boolean,
+  source: string = ""
 ) {
+  //////////??????????????????????????????
+  const unique = Math.random().toString(16).slice(2);
+  const lock = new AsyncLock();
 
-  const unique = Math.random().toString(16).slice(2,);
+  async function processImageTag(replPattern: any) {
+    let { replp, anchor, link, protocol, caption, AttSize, keypart, q1, q2 } =
+      replPattern;
 
-  async function processImageTag(match: string,
-    anchor: string,
-    link: string,
-    caption: string,
-    imgsize: string) {
-
-
-    logError("processImageTag: " + match)
+    logError("processImageTag: " + replp);
+    logError(replPattern);
     if (!isUrl(link)) {
-      return match;
+      return replp;
+    }
+
+    // check url excludes
+    if (settings.UrlExcludeRegexps) {
+      const lines = settings.UrlExcludeRegexps.split(/[\n\r]+/)
+        .map((l) => l.trim())
+        .filter((l) => l);
+      for (const r of lines) {
+        try {
+          if (new RegExp(r, "i").test(link)) {
+            logError("URL excluded by regexp: " + r + " -> " + link);
+            return replp;
+          }
+        } catch (e) {
+          logError("Bad exclude regexp: " + r + " " + e);
+        }
+      }
     }
 
     try {
-
-      var lock = new AsyncLock();
-      let fpath;
+      let fpath = link.replace(protocol, "");
       let fileData: ArrayBuffer;
-      const opsys = process.platform;
-      const mediaDir = await getMDir(app.app, noteFile, settings, defaultdir, unique);
-      await app.ensureFolderExists(mediaDir);
-      const protocol = link.slice(0, 5);
 
       if (protocol == "data:") {
-        logError("ReadBase64: \r\n" + fpath, false);
+        logError("ReadBase64: \r\n" + link, false);
         fileData = await base64ToBuff(link);
+      } else if (protocol == "file:") {
+        logError("Readlocal: \r\n" + fpath, false);
+        fileData = await readFromDisk(fpath);
+        if (fileData === null) {
+          fileData = await readFromDisk(decodeURI(fpath));
+        }
+      } else {
+        //Try to download several times, rotating the referer: origin first, then frontmatter 'source'
+        const origin = link.match(URL_PATTERN)
+          ? link.match(URL_PATTERN)[0]
+          : "";
+        const referers: Array<string> = [];
+        for (const candidate of [origin, source]) {
+          const value = String(candidate ?? "").trim();
+          if (value.length != 0 && !referers.includes(value)) {
+            referers.push(value);
+          }
+        }
+        let trycount = 0;
+        while (trycount < settings.tryCount) {
+          const referer =
+            referers.length != 0 ? referers[trycount % referers.length] : "";
+          fileData = await downloadImage(link, referer);
+          logError(
+            "\r\n\nDownloading (try): " +
+              trycount +
+              " referer: " +
+              referer +
+              "\r\n\n"
+          );
+          if (fileData !== null) {
+            break;
+          }
+          trycount++;
+        }
       }
-      else
-
-        if (protocol == "file:") {
-          logError("Readlocal: \r\n" + fpath, false);
-          if (SUPPORTED_OS.win.includes(opsys)) { fpath = link.replace("file:///", ""); }
-          else if (SUPPORTED_OS.unix.includes(opsys)) { fpath = link.replace("file://", ""); }
-          else { fpath = link.replace("file://", ""); }
-
-          fileData = await readFromDisk(fpath);
-          if (fileData === null) {
-            fileData = await readFromDisk(decodeURI(fpath));
-          }
-        }
-        else {
-          //Try to download several times
-          let trycount = 0;
-          while (trycount < settings.tryCount) {
-            fileData = await downloadImage(link);
-            logError("\r\n\nDownloading (try): " + trycount + "\r\n\n");
-            if (fileData !== null) { break; }
-            trycount++;
-          }
-        }
       if (fileData === null) {
-        logError("Cannot get an attachment content!", false);
+        logError(
+          "Cannot copy/download an attachment! Try to add referer in frontmatter 'source' field.",
+          false
+        );
+        showBalloon(
+          translate("Cannot copy/download an attachment! Try to add referer in frontmatter 'source' field."),
+          settings.showNotifications,
+          NOTICE_TIMEOUT
+        );
         return null;
       }
-
 
       if (Math.round(fileData.byteLength / 1024) < settings.filesizeLimit) {
         logError("Lower limit of the file size!", false);
@@ -101,89 +137,103 @@ export function imageTagProcessor(app: Plugin,
       }
 
       try {
+        const mediaDir = await getMDir(
+          app.app,
+          noteFile,
+          settings,
+          defaultdir,
+          unique
+        );
 
+        const { fileName, needWrite } = await lock.acquire(
+          link,
+          async function () {
+            const parsedUrl = new URL(link);
 
-        const { fileName, needWrite } = await lock.acquire(match, async function () {
+            let fileExt = await getFileExt(fileData, parsedUrl.pathname);
 
+            if (fileExt == "png" && settings.PngToJpeg) {
+              fileData = await blobToJpegArrayBuffer(
+                fileData,
+                settings.JpegQuality * 0.01,
+                settings.ImgCompressionType
+              );
+              logError("arbuf: ");
+              logError(fileData);
+            }
+            const { fileName, needWrite } = await chooseFileName(
+              app.app.vault.adapter,
+              mediaDir,
+              link,
+              fileData,
+              settings,
+              {
+                notename: noteFile.basename,
+                date: moment().format(settings.DateFormat),
+              }
+            );
 
-          const parsedUrl = new URL(link);
+            if (needWrite && fileName) {
+              await app.ensureFolderExists(mediaDir);
+              try {
+                await app.app.vault.createBinary(fileName, fileData);
+              } catch (e) {
+                logError(e);
+                throw e;
+              }
+            }
 
-          let fileExt = await getFileExt(fileData, parsedUrl.pathname);
-
-
-          if (fileExt == "png" && settings.PngToJpeg) {
-
-
-            let compType = (settings.ImgCompressionType == "") ? "image/jpeg" : settings.ImgCompressionType;
-            const blob = new Blob([new Uint8Array(fileData)]);
-            fileData = await blobToJpegArrayBuffer(blob, settings.JpegQuality * 0.01, compType)
-            logError("arbuf: ")
-            logError(fileData)
+            return { fileName, needWrite };
           }
-          const { fileName, needWrite } = await chooseFileName(
-            app.app.vault.adapter,
-            mediaDir,
-            link,
-            fileData,
-            settings
-          );
-          return { fileName, needWrite };
-        });
-
-
-
-        if (needWrite && fileName) {
-          await app.app.vault.createBinary(fileName, fileData);
-        }
+        );
 
         if (fileName) {
+          let { pathWiki, pathMd, pathMdAngle } = await getRDir(
+            noteFile,
+            settings,
+            fileName,
+            link
+          );
 
-          let shortName = "";
-          const rdir = await getRDir(noteFile, settings, fileName, link);
-          let pathWiki = rdir[0];
-          let pathMd = rdir[1];
+          let imageTag = "";
 
-
-          if (settings.addNameOfFile && protocol == "file:") {
-
-            if (!app.app.vault.getConfig("useMarkdownLinks")) {
-
-              shortName = "\r\n[[" +
-                fileName +
-                "\|" +
-                rdir[2]["lnkurid"] + "]]\r\n";
+          const useMd =
+            settings.useMarkdownLinkFormat ||
+            app.app.vault.getConfig("useMarkdownLinks");
+          if (!useMd) {
+            // image size has higher priority, otherwise the caption is kept
+            if (!settings.useCaptions) {
+              caption = "";
+            } else if (AttSize.length) {
+              caption = "|" + AttSize;
+            } else {
+              caption = caption.length ? "|" + caption : "";
             }
-            else {
-              shortName = "\r\n[" +
-                rdir[2]["lnkurid"] +
-                "](" +
-                rdir[2]["pathuri"] +
-                ")\r\n";
-            }
+
+            imageTag = `![[${pathWiki}${caption}]]`;
+          } else {
+            !settings.useCaptions || !caption.length
+              ? (caption = "")
+              : (caption = " " + caption);
+            const mdLink = settings.useMarkdownLinkFormat
+              ? `<${pathMdAngle}>`
+              : pathMd;
+            imageTag = `![${anchor}](${mdLink}${caption})`;
           }
 
-          if (!app.app.vault.getConfig("useMarkdownLinks")) {
+          //the tag without the frontmatter key: what the metadata cache reports as the embed
+          const bareImageTag = imageTag;
 
-            // image caption
-            (!settings.useCaptions || !caption.length) ? caption = "" : caption = "\|" + caption;
-
-            // image size has higher priority
-            (!settings.useCaptions || !imgsize.length) ? caption = "" : caption = "\|" + imgsize;
-
-            return [match, `![[${pathWiki}${caption}]]`, `${shortName}`];
+          //frontmatter values must stay a valid yaml scalar: restore the key and the quotes
+          if (keypart !== undefined && keypart !== "") {
+            const quote = q1 || q2 || `"`;
+            imageTag = keypart + quote + imageTag + quote;
           }
 
-          else {
-            (!settings.useCaptions || !caption.length) ? caption = "" : caption = " " + caption;
-            return [match, `![${anchor}](${pathMd}${caption})`, `${shortName}`];
-          }
-
-
-
+          return [replp, imageTag, bareImageTag];
         } else {
           return null;
         }
-
       } catch (error) {
         if (error.message === "File already exists.") {
         } else {
@@ -201,203 +251,238 @@ export function imageTagProcessor(app: Plugin,
   return processImageTag;
 }
 
-
-
-
-
-export async function getRDir(noteFile: TFile,
+export async function getRDir(
+  noteFile: TFile,
   settings: ISettings,
   fileName: string,
-  link: string = undefined):
-  Promise<Array<any>> {
+  link: string = undefined
+): Promise<any> {
   let pathWiki = "";
   let pathMd = "";
+  let pathMdAngle = "";
 
   const notePath = normalizePath(noteFile.parent.path);
   const parsedPath = path.parse(normalizePath(fileName));
 
   const parsedPathE = {
     parentd: path.basename(parsedPath["dir"]),
-    basen: (parsedPath["name"] + parsedPath["ext"]),
+    basen: parsedPath["name"] + parsedPath["ext"],
     lnkurid: path.basename(decodeURI(link)),
-    pathuri: encodeURI(normalizePath(fileName))
+    pathuri: encodeURI(normalizePath(fileName)),
   };
-
-
 
   switch (settings.pathInTags) {
     case "baseFileName":
-      pathWiki = pathMd = parsedPathE["basen"];
+      pathWiki = pathMd = pathMdAngle = parsedPathE["basen"];
       break;
     case "onlyRelative":
-      pathWiki = pathJoin([path.relative(path.sep + notePath, path.sep + parsedPath["dir"]), parsedPathE["basen"]]);
+      pathWiki = pathJoin([
+        path.relative(path.sep + notePath, path.sep + parsedPath["dir"]),
+        parsedPathE["basen"],
+      ]);
       pathMd = encodeURI(pathWiki);
+      pathMdAngle = pathWiki;
       break;
     case "fullDirPath":
-      pathWiki = fileName.replace(/\\/g, "/");
+      pathWiki = normalizePath(fileName);
       pathMd = parsedPathE["pathuri"];
+      pathMdAngle = pathWiki;
       break;
     default:
       pathWiki = fileName;
       pathMd = parsedPathE["pathuri"];
+      pathMdAngle = pathWiki;
+  }
+  return {
+    pathWiki: pathWiki,
+    pathMd: pathMd,
+    pathMdAngle: pathMdAngle || pathWiki,
+    parsedPathE: parsedPathE,
   };
-  return [pathWiki, pathMd, parsedPathE];
-
 }
 
-
-export async function getMDir(app: App,
+export async function getMDir(
+  app: App,
   noteFile: TFile,
   settings: ISettings,
   defaultdir: boolean = false,
-  unique: string = ""): Promise<string> {
-
-
+  unique: string = ""
+): Promise<string> {
   const notePath = noteFile.parent.path;
   const date = new Date();
   const current_date = moment().format(settings.DateFormat);
   const obsmediadir = app.vault.getConfig("attachmentFolderPath");
   const mediadir = settings.mediaRootDir;
   var attdir = settings.saveAttE;
-  if (defaultdir) { attdir = "" };
+  if (defaultdir) {
+    attdir = "";
+  }
   let root = "/";
+  const pathCtx: FileNameCtx = {
+    notename: noteFile.basename,
+    unique: unique,
+    date: current_date,
+  };
 
   switch (attdir) {
-
-    case 'inFolderBelow':
-      root = mediadir
-        .replace("${notename}", noteFile.basename)
-        .replace("${unique}", unique)
-        .replace("${date}", current_date);
+    case "inFolderBelow":
+      root = renderNameTemplate(mediadir, pathCtx, "path");
       break;
 
-    case 'nextToNoteS':
-      root = (pathJoin([noteFile.parent.path, mediadir]))
-        .replace("${notename}", noteFile.basename)
-        .replace("${unique}", unique)
-        .replace("${date}", current_date);
+    case "nextToNoteS":
+      root = pathJoin([
+        noteFile.parent.path,
+        renderNameTemplate(mediadir, pathCtx, "path"),
+      ]);
       break;
 
     default:
-
-      if (obsmediadir === '/') {
-        root = obsmediadir;
-      }
-      else if (obsmediadir === './') {
-        root = pathJoin([noteFile.parent.path]);
-      }
-      else if (obsmediadir.match(/\.\/.+/g) !== null) {
-        root = pathJoin([noteFile.parent.path, obsmediadir.replace('\.\/', '')]);
-      }
-      else {
-        root = normalizePath(obsmediadir);
-      }
-
+      root =
+        obsmediadir === "/"
+          ? obsmediadir
+          : obsmediadir === "./"
+          ? pathJoin([noteFile.parent.path])
+          : obsmediadir.match(/\.\/.+/g) !== null
+          ? pathJoin([noteFile.parent.path, obsmediadir.replace("./", "")])
+          : (root = normalizePath(obsmediadir));
   }
 
   return trimAny(root, ["/", "\\"]);
-
-
 }
-
-
-
-
-
-
-
-
-
 
 async function chooseFileName(
   adapter: DataAdapter,
   dir: string,
   link: string,
   contentData: ArrayBuffer,
-  settings: ISettings
+  settings: ISettings,
+  ctx: FileNameCtx = {}
 ): Promise<{ fileName: string; needWrite: boolean }> {
   const parsedUrl = new URL(link);
   const ignoredExt = settings.ignoredExt.split("|");
   let fileExt = await getFileExt(contentData, parsedUrl.pathname);
-  logError("file: " + link + " content: " + contentData + " file ext: " + fileExt, false);
-
-
+  logError(
+    "file: " + link + " content: " + contentData + " file ext: " + fileExt,
+    false
+  );
 
   if (fileExt == "unknown" && !settings.downUnknown) {
     return { fileName: "", needWrite: false };
   }
 
-
   if (ignoredExt.includes(fileExt)) {
     return { fileName: "", needWrite: false };
   }
 
+  let rawName = parsedUrl.pathname;
+  try {
+    rawName = decodeURI(parsedUrl.pathname);
+  } catch (e) {}
+  const originalname = rawName.endsWith("/") ? "" : path.parse(rawName).name;
 
+  const nameCtx: FileNameCtx = {
+    ...ctx,
+    md5: md5Sig(contentData),
+    originalname: originalname,
+    unique: Math.random().toString(16).slice(2),
+  };
 
+  const baseName = renderNameTemplate(
+    settings.FileNameTemplate,
+    nameCtx,
+    "file"
+  );
 
-  const baseName = md5Sig(contentData);
-
-  let needWrite = true;
-  let fileName = "";
-  const suggestedName = pathJoin([dir, cFileName(`${baseName}` + `.${fileExt}`)]);
-  if (await adapter.exists(suggestedName, false)) {
-    const fileData = await adapter.readBinary(suggestedName);
-    const existing_file_md5 = md5Sig(fileData);
-    if (existing_file_md5 === baseName) {
-      fileName = suggestedName;
-      needWrite = false;
-    }
-    else {
-      fileName = pathJoin([dir, cFileName(Math.random().toString(9).slice(2,) + `.${fileExt}`)]);
-    }
-
-  } else {
-    fileName = suggestedName;
-  }
+  const { fileName, needWrite } = await resolveUniqueName(
+    adapter,
+    dir,
+    baseName,
+    fileExt,
+    nameCtx.md5
+  );
 
   logError("File name: " + fileName, false);
   if (!fileName) {
     throw new Error("Failed to generate file name for media file.");
   }
 
-  //linkHashes.ensureHashGenerated(link, contentData);
-
   return { fileName, needWrite };
 }
 
+export function NoteContentReplacer(NoteData: string, Patterns: Object) {}
 
+//frontmatter block only: from the leading "---" line up to and including the closing "---" line
+const FRONTMATTER_SPLIT_PATTERN =
+  /^---[ \t]*\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/;
 
+export function splitFrontmatter(content: string): [string, string] {
+  const match = content.match(FRONTMATTER_SPLIT_PATTERN);
+  if (!match) {
+    return ["", content];
+  }
+  return [content.slice(0, match[0].length), content.slice(match[0].length)];
+}
 
+export function getFrontmatterSource(fmPart: string): string {
+  if (!fmPart) {
+    return "";
+  }
+  const match = fmPart.match(/^[ \t]*source[ \t]*:[ \t]*(.*)$/im);
+  if (!match) {
+    return "";
+  }
+  return match[1]
+    .trim()
+    .replace(/^['"](.*)['"]$/, "$1")
+    .trim();
+}
 
+export async function FrontMatterParser(
+  app: Plugin,
+  noteFile: TFile,
+  SearchPattern: Array<RegExp>
+) {
+  const FrontMatterEmbeds = { files: new Array(), urls: new Array() };
 
-export async function FrontMatterParser(app: Plugin, noteFile: TFile, SearchPattern: Array<RegExp>) {
-
-  const FrontMatterEmbeds = { files: new Array, urls: new Array };
- 
-  await app.app.fileManager.processFrontMatter(noteFile, (frontmatter: Object): Object => {
-
-    if (!frontmatter) {
-      return FrontMatterEmbeds;
-    }
-
-    Object.entries(frontmatter).forEach(([key, value]) => {
- 
-      for (const reg_p of SearchPattern) {
-        if (reg_p.test(String(value))) {
-
-          const LocLinkfound = String(value).match(reg_p)?.groups?.loclink;
-
-          if (LocLinkfound != undefined) {
-            const FileBaseName = trimAny(LocLinkfound, ["]", "[", ")", "(", " "]);
-            const MDMatch = trimAny(String(value).match(reg_p)[0], [" "]);
-            FrontMatterEmbeds.files.push({ "key": key, "match": MDMatch, "link": FileBaseName });
-          }
-        }
+  await app.app.fileManager.processFrontMatter(
+    noteFile,
+    (frontmatter: Object): Object => {
+      if (!frontmatter) {
+        return FrontMatterEmbeds;
       }
 
-    });
+      Object.entries(frontmatter).forEach(([key, value]) => {
+        for (const reg_p of SearchPattern) {
+          //a /g regex keeps lastIndex after .test() and would miss the next value
+          reg_p.lastIndex = 0;
+          const m = reg_p.exec(String(value));
+          if (m !== null) {
+            const LocLinkfound = m.groups?.loclink;
+            const UrlLinkfound = m.groups?.urllink;
 
-  });
+            if (LocLinkfound != undefined) {
+              const FileBaseName = CtagsBrcks(LocLinkfound);
+              const MDMatch = CtagsWhS(m[0]);
+              FrontMatterEmbeds.files.push({
+                key: key,
+                match: MDMatch,
+                link: FileBaseName,
+              });
+            }
+            if (UrlLinkfound != undefined) {
+              const FileBaseName = CtagsBrcks(UrlLinkfound);
+              const MDMatch = CtagsWhS(m[0]);
+              FrontMatterEmbeds.urls.push({
+                key: key,
+                match: MDMatch,
+                link: FileBaseName,
+              });
+            }
+          }
+        }
+      });
+    }
+  );
 
   return FrontMatterEmbeds;
-} 
+}
