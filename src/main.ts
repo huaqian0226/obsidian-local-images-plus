@@ -1154,8 +1154,15 @@ export default class LocalImagesPlugin extends Plugin {
 
 
   // Rename attachments to their MD5 signature and rewrite note references to relative paths.
-  private renameMD5 = (type: string, filesToRename: Array<RenamePlanItem> = undefined, notesToUpdate: Array<TFile> = undefined) => async () => {
+  private renameMD5 = (type: string, filesToRename: Array<RenamePlanItem> = undefined, notesToUpdate: Array<TFile> = undefined, prescan: { failed: number, skipped: number } = { failed: 0, skipped: 0 }) => async () => {
     const obsmediadir = (this.app.vault as typeof this.app.vault & { getConfig(key: string): string }).getConfig("attachmentFolderPath")
+
+    let failedCount = prescan.failed;
+    let skippedCount = prescan.skipped;
+    const reportSummary = (renamed: number, noteFailures: number = 0) => showBalloon(
+      renamed + " attachment(s) renamed to MD5 format. " + failedCount + " failed, " + skippedCount + " skipped. " + noteFailures + " note update(s) failed.",
+      this.settings.showNotifications
+    );
 
     if (type == "plugin") {
       let oldRootdir = this.settings.mediaRootDir
@@ -1199,10 +1206,12 @@ export default class LocalImagesPlugin extends Plugin {
           }
           const binData = await readFromDisk(pathJoin([(this.app.vault.adapter as typeof this.app.vault.adapter & { basePath: string }).basePath, f.path]))
           if (!binData) {
+            failedCount++;
             continue
           }
           const newBaseName = md5Sig(binData)
           if (!newBaseName) {
+            failedCount++;
             continue
           }
           const newName = newBaseName + ext
@@ -1211,18 +1220,20 @@ export default class LocalImagesPlugin extends Plugin {
           }
           const newPath = pathJoin([oldRootdir, newName])
           if (await this.app.vault.adapter.exists(newPath)) {
+            skippedCount++;
             continue
           }
           planRename.push({ oldPath: f.path, newPath, oldName: f.name, newName })
         }
         if (planRename.length == 0) {
-          showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
+          if (failedCount || skippedCount) reportSummary(0);
+          else showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
           return
         }
         const mod = new ModalW1(this.app)
         mod.messg = "Confirm MD5 rename:\r\n  " + oldRootdir + "  →  " + planRename.length + " file(s)\r\n  Notes to update  →  " + siblingNotes.length + "\r\n      "
         mod.plugin = this
-        mod.callbackFunc = this.renameMD5("execrename", planRename, siblingNotes)
+        mod.callbackFunc = this.renameMD5("execrename", planRename, siblingNotes, { failed: failedCount, skipped: skippedCount })
         mod.open()
       }
     }
@@ -1272,10 +1283,12 @@ export default class LocalImagesPlugin extends Plugin {
           }
           const binData = await readFromDisk(pathJoin([(this.app.vault.adapter as typeof this.app.vault.adapter & { basePath: string }).basePath, f.path]))
           if (!binData) {
+            failedCount++;
             continue
           }
           const newBaseName = md5Sig(binData)
           if (!newBaseName) {
+            failedCount++;
             continue
           }
           const newName = newBaseName + ext
@@ -1284,6 +1297,7 @@ export default class LocalImagesPlugin extends Plugin {
           }
           const newPath = pathJoin([sub.path, newName])
           if (await this.app.vault.adapter.exists(newPath)) {
+            skippedCount++;
             continue
           }
           planRename.push({ oldPath: f.path, newPath, oldName: f.name, newName })
@@ -1299,7 +1313,8 @@ export default class LocalImagesPlugin extends Plugin {
         }
       }
       if (planRename.length == 0) {
-        showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
+        if (failedCount || skippedCount) reportSummary(0);
+        else showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
         return
       }
       let detail = ""
@@ -1309,11 +1324,18 @@ export default class LocalImagesPlugin extends Plugin {
       const mod = new ModalW1(this.app)
       mod.messg = "Rename " + planRename.length + " attachment(s) to MD5 format (" + dirMap.size + " folder(s) scanned)" + detail + "\r\n      "
       mod.plugin = this
-      mod.callbackFunc = this.renameMD5("execrename", planRename, allNotesToUpdate)
+      mod.callbackFunc = this.renameMD5("execrename", planRename, allNotesToUpdate, { failed: failedCount, skipped: skippedCount })
       mod.open()
     }
 
     if (type == "execrename") {
+      // A bare filename is only safe to rewrite if its source is unambiguous.
+      const originalPathsByName = new Map<string, string[]>();
+      for (const file of this.app.vault.getFiles()) {
+        const paths = originalPathsByName.get(file.name) || [];
+        paths.push(file.path);
+        originalPathsByName.set(file.name, paths);
+      }
       const normalizeVaultPath = (p: string) => trimAny(normalizePath(String(p || "")), ["\/"])
       const resolveLinkToVaultPath = (notePath: string, linkPath: string) => {
         if (!linkPath) {
@@ -1359,7 +1381,7 @@ export default class LocalImagesPlugin extends Plugin {
         const resolvedPath = resolveLinkToVaultPath(note.path, rawLinkClean)
         const oldPath = normalizeVaultPath(item.oldPath)
         const basePathPart = rawLinkClean.split("#")[0].split("?")[0]
-        const baseNameOnlyMatch = path.basename(basePathPart) === item.oldName &&
+        const baseNameOnlyMatch = originalPathsByName.get(item.oldName)?.length === 1 && path.basename(basePathPart) === item.oldName &&
           !basePathPart.includes("/") &&
           !basePathPart.includes("\\")
         if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
@@ -1389,7 +1411,7 @@ export default class LocalImagesPlugin extends Plugin {
         const cleanPathPart = pathPart.trim()
         const resolvedPath = resolveLinkToVaultPath(note.path, cleanPathPart)
         const oldPath = normalizeVaultPath(item.oldPath)
-        const baseNameOnlyMatch = path.basename(cleanPathPart) === item.oldName &&
+        const baseNameOnlyMatch = originalPathsByName.get(item.oldName)?.length === 1 && path.basename(cleanPathPart) === item.oldName &&
           !cleanPathPart.includes("/") &&
           !cleanPathPart.includes("\\")
         if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
@@ -1398,20 +1420,30 @@ export default class LocalImagesPlugin extends Plugin {
         const relPath = buildRelativeLink(note.path, item.newPath)
         return opener + relPath + anchorPart + aliasPart + closer
       })
-      let renamedCount = 0
+      const renamedItems: RenamePlanItem[] = [];
+      const renamedTargets = new Set<string>();
       for (const item of filesToRename) {
         try {
-          await this.app.vault.adapter.rename(item.oldPath, item.newPath)
-          renamedCount++
+          // The plan may contain equal hashes, or a target may have appeared since confirmation.
+          // Never let the adapter overwrite another attachment.
+          if (renamedTargets.has(item.newPath) || await this.app.vault.adapter.exists(item.newPath)) {
+            skippedCount++;
+            continue;
+          }
+          await this.app.vault.adapter.rename(item.oldPath, item.newPath);
+          renamedItems.push(item);
+          renamedTargets.add(item.newPath);
         } catch (e) {
-          logError("Rename to MD5 failed: " + e)
+          failedCount++;
+          logError("Rename to MD5 failed: " + e);
         }
       }
+      let noteFailures = 0;
       for (const note of notesToUpdate) {
         try {
           let filedata = await this.app.vault.read(note)
           let changed = false
-          for (const item of filesToRename) {
+          for (const item of renamedItems) {
             const updatedMd = rewriteMdLink(filedata, note, item)
             const updatedWiki = rewriteWikiLink(updatedMd, note, item)
             if (updatedWiki !== filedata) {
@@ -1423,10 +1455,11 @@ export default class LocalImagesPlugin extends Plugin {
             await this.app.vault.modify(note, filedata)
           }
         } catch (e) {
+          noteFailures++;
           logError("Update note refs failed: " + e)
         }
       }
-      showBalloon(renamedCount + " attachment(s) renamed to MD5 format.", this.settings.showNotifications)
+      reportSummary(renamedItems.length, noteFailures);
     }
   }
 
