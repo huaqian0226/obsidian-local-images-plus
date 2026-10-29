@@ -107,7 +107,16 @@ function setup(paths, contents = {}, caches = {}, overrides = {}, vaultConfig = 
   };
   const app = {
     vault,
-    metadataCache: { getCache: p => caches[p], getFileCache: f => caches[f.path] },
+    metadataCache: {
+      getCache: p => caches[p], getFileCache: f => caches[f.path], resolvedLinks: {},
+      getFirstLinkpathDest: (link, source) => {
+        const clean = decodeURI(link).split(/[?#|]/)[0];
+        const direct = byPath[path.posix.join(path.posix.dirname(source), clean)] || byPath[clean];
+        if (direct) return direct;
+        const matches = files.filter(f => f.name === clean && byPath[f.path]);
+        return matches.length === 1 ? matches[0] : null;
+      },
+    },
     workspace: { activeEditor: { file: files[0] }, getActiveFile: () => files[0], on() {}, off() {} },
     internalPlugins: { plugins: { canvas: { instance: { index: {
       parseText: async text => ({ links: [...text.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => ({ link: m[1] })) }),
@@ -404,3 +413,120 @@ test('sibling ./images grouping keeps Canvas basename fallback in its own parent
   await x.plugin.removeOrphans('obsidian')(); await confirm();
   assert.deepEqual(deletedPaths(x), ['B/images/shared.png']);
 });
+
+for (const mode of ['obsidian', 'plugin']) {
+  test(`SAFETY fix2 orphan: excluded bare wikilink survives relative ./images (${mode})`, async () => {
+    const x = setup(['notes/A.md', 'notes/B.md', 'notes/board.canvas', 'Archive/old.md',
+      ...['used', 'yamlonly', 'canvasref', 'canvasonly', 'archref', 'orphan'].map(n => `notes/images/${n}.png`)], {
+      'notes/A.md': '![used](images/used.png)\n\n![[canvasref.png]]',
+      'notes/B.md': '---\ncover: "[[yamlonly.png]]"\n---',
+      'notes/board.canvas': JSON.stringify({ nodes: [{ type: 'file', file: 'notes/images/canvasonly.png' }] }),
+      'Archive/old.md': '![[archref.png]]',
+    }, {
+      'notes/A.md': { embeds: [{ link: 'images/used.png' }, { link: 'canvasref.png' }] },
+      'notes/B.md': { frontmatterLinks: [{ link: 'yamlonly.png' }] },
+      'Archive/old.md': { embeds: [{ link: 'archref.png' }] },
+    }, { saveAttE: 'obsFolder', ExcludeOrphanFoldersList: 'Archive' });
+    await x.plugin.onload();
+    try {
+      x.plugin.commands.find(c => c.id === `remove-orphans-from-${mode}-folder`).callback();
+      // Command callbacks launch the async scan without returning its promise.
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(dialogs.length, 1);
+      const preview = dialogs[0].messg;
+      assert.deepEqual(x.writes, [], 'Prescan must be read-only');
+      await confirm();
+      console.info(`FIX2 ${mode}: ${preview.replace(/\s+/g, ' ')}; trashed=${deletedPaths(x).length} ${deletedPaths(x).join(',')}`);
+      assert.deepEqual(deletedPaths(x), ['notes/images/orphan.png']);
+      assert.match(preview, /notes\/images → 1 file\(s\)/);
+    } finally { x.plugin.onunload(); }
+  });
+}
+
+for (const [label, mode, settings, attachmentFolderPath, dir] of [
+  ['obsidian relative', 'obsidian', {}, './images', 'notes/images'],
+  ['plugin relative', 'plugin', { saveAttE: 'obsFolder' }, './images', 'notes/images'],
+  ['plugin sibling', 'plugin', { saveAttE: 'nextToNoteS', mediaRootDir: 'images' }, './images', 'notes/images'],
+  ['plugin notename', 'plugin', { saveAttE: 'nextToNoteS', mediaRootDir: '${notename}' }, './images', 'notes/A'],
+  ['obsidian fixed', 'obsidian', {}, 'Assets', 'Assets'],
+  ['plugin fixed', 'plugin', { saveAttE: 'inFolderBelow', mediaRootDir: 'Assets' }, './images', 'Assets'],
+]) {
+  test(`SAFETY fix2 orphan: all excluded reference sources protect candidates (${label})`, async () => {
+    const x = setup(['notes/A.md', 'Archive/old.md', 'Archive/board.canvas',
+      ...['body', 'yaml', 'canvas', 'text', 'cache', 'orphan'].map(n => `${dir}/${n}.png`),
+      'Archive/images/keep.png'], {
+      'Archive/board.canvas': JSON.stringify({ nodes: [
+        { type: 'file', file: `${dir}/canvas.png` }, { type: 'text', text: '![[text.png]]' },
+      ] }),
+    }, { 'Archive/old.md': { embeds: [{ link: 'body.png' }], frontmatterLinks: [{ link: 'yaml.png' }] } },
+    { ...settings, ExcludeOrphanFoldersList: 'Archive', processFrontmatter: false, processCanvas: false }, { attachmentFolderPath });
+    x.app.metadataCache.resolvedLinks = { 'Archive/old.md': { [`${dir}/cache.png`]: 1 } };
+    await x.plugin.removeOrphans(mode)(); await confirm();
+    assert.deepEqual(deletedPaths(x), [`${dir}/orphan.png`]);
+  });
+}
+
+test('SAFETY fix2 orphan: resolver distinguishes duplicate basenames across relative folders', async () => {
+  const x = setup(['notes/A.md', 'other/B.md', 'Archive/old.md', 'notes/images/shared.png', 'other/images/shared.png'], {}, {
+    'Archive/old.md': { embeds: [{ link: 'shared.png' }] },
+  }, { ExcludeOrphanFoldersList: 'Archive' });
+  x.app.metadataCache.getFirstLinkpathDest = () => x.byPath['notes/images/shared.png'];
+  await x.plugin.removeOrphans('obsidian')(); await confirm();
+  assert.deepEqual(deletedPaths(x), ['other/images/shared.png']);
+});
+
+test('SAFETY fix2 orphan: unique bare basename fallback works without resolver cache', async () => {
+  const x = setup(['notes/A.md', 'Archive/old.md', 'notes/images/used.png', 'notes/images/orphan.png'], {}, {
+    'Archive/old.md': { embeds: [{ link: 'used.png' }] },
+  }, { ExcludeOrphanFoldersList: 'Archive' });
+  x.app.metadataCache.getFirstLinkpathDest = undefined;
+  await x.plugin.removeOrphans('obsidian')(); await confirm();
+  assert.deepEqual(deletedPaths(x), ['notes/images/orphan.png']);
+});
+
+test('SAFETY fix2 MD5: plugin command skips excluded attachment folder before reading bytes', async () => {
+  const x = setup(['notes/A.md', 'notes/images/x.png'], {}, {}, {
+    saveAttE: 'obsFolder', ExcludeRenameFoldersList: 'notes/images',
+  });
+  let reads = 0;
+  const read = utils.readFromDisk;
+  utils.readFromDisk = async () => { reads++; return Buffer.from('fix2-image'); };
+  try {
+    await x.plugin.renameMD5('plugin')();
+    assert.equal(reads, 0); assert.deepEqual(dialogs, []); assert.deepEqual(x.writes, []);
+  } finally { utils.readFromDisk = read; }
+});
+
+for (const mode of ['plugin', 'obsidian']) {
+  test(`SAFETY fix2 MD5: prescan rewrites excluded Markdown YAML and Canvas references (${mode})`, async () => {
+    const x = setup(['notes/A.md', 'Archive/old.md', 'Archive/other.md', 'Archive/board.canvas', 'notes/images/x.png',
+      'Archive/images/keep.png', 'other/images/x.png'], {
+      'notes/A.md': '![](images/x.png)',
+      'Archive/old.md': '---\ncover: "[[x.png#cover|alias]]"\n---\n![body](x.png?size=1) ![[notes/images/x.png]]',
+      'Archive/other.md': '![[other/images/x.png]]',
+      'Archive/board.canvas': JSON.stringify({ nodes: [
+        { type: 'file', file: 'notes/images/x.png' }, { type: 'text', text: '![[x.png#h|alias]]' },
+      ], edges: [] }),
+    }, {}, { saveAttE: 'obsFolder', ExcludeRenameFoldersList: 'Archive' });
+    // Obsidian can resolve a bare link even when more than one attachment has that name.
+    const target = x.byPath['notes/images/x.png'];
+    x.app.metadataCache.getFirstLinkpathDest = link => link === 'other/images/x.png'
+      ? x.byPath['other/images/x.png'] : link.split(/[?#|]/)[0].endsWith('x.png') ? target : null;
+    const read = utils.readFromDisk; utils.readFromDisk = async () => Buffer.from('fix2-image');
+    const hash = utils.md5Sig(Buffer.from('fix2-image'));
+    try {
+      await x.plugin.renameMD5(mode)();
+      assert.deepEqual(x.writes, []);
+      await confirm();
+      assert.deepEqual(x.writes.filter(w => w[0] === 'rename'), [['rename', 'notes/images/x.png', `notes/images/${hash}.png`]]);
+      assert.equal(x.contents['Archive/old.md'], `---\ncover: "[[../notes/images/${hash}.png#cover|alias]]"\n---\n![body](../notes/images/${hash}.png?size=1) ![[../notes/images/${hash}.png]]`);
+      const canvas = JSON.parse(x.contents['Archive/board.canvas']);
+      assert.equal(canvas.nodes[0].file, `notes/images/${hash}.png`);
+      assert.equal(canvas.nodes[1].text, `![[../notes/images/${hash}.png#h|alias]]`);
+      assert.equal(x.contents['Archive/other.md'], '![[other/images/x.png]]');
+      assert.deepEqual(canvas.edges, []);
+      assert.ok(x.byPath['Archive/images/keep.png']); assert.ok(x.byPath['other/images/x.png']);
+      assertRenameSummary(1, 0, 0);
+    } finally { utils.readFromDisk = read; }
+  });
+}

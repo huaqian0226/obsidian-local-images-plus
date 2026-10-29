@@ -903,6 +903,18 @@ export default class LocalImagesPlugin extends Plugin {
     const bareReferenceNames = new Set<string>();
     if (type === "plugin" || type === "obsidian") {
       const existingPaths = new Set(allFiles.map(file => file.path));
+      const pathsByName = new Map<string, string[]>();
+      for (const file of allFiles) {
+        const paths = pathsByName.get(file.name) || [];
+        paths.push(file.path);
+        pathsByName.set(file.name, paths);
+      }
+      // Obsidian already resolves shortest/bare links, including links from excluded notes.
+      for (const destinations of Object.values(this.app.metadataCache.resolvedLinks || {})) {
+        for (const [destination, count] of Object.entries(destinations)) {
+          if (count > 0 && existingPaths.has(destination)) referencedPaths.add(destination);
+        }
+      }
       for (const file of allFiles) {
         if (!this.ExemplaryOfMD(file.path) && !this.ExemplaryOfCANVAS(file.path)) continue;
         await collectFileLinks(file, link => {
@@ -910,11 +922,18 @@ export default class LocalImagesPlugin extends Plugin {
           try { clean = decodeURI(clean); } catch { /* Keep malformed escapes unchanged. */ }
           clean = normalizePath(clean).replace(/^app:\/\/(?:local\/)?/, "");
           if (!clean || /^(?:https?:|data:|file:)/i.test(clean)) return;
+          const resolved = this.app.metadataCache.getFirstLinkpathDest?.(clean, file.path);
+          if (resolved) referencedPaths.add(resolved.path);
           // Resolve both Obsidian vault paths and note-relative Markdown paths.
           for (const candidate of [clean.replace(/^\//, ""), pathJoin([path.dirname(file.path), clean])]) {
             if (existingPaths.has(candidate)) referencedPaths.add(candidate);
           }
-          if (!clean.includes("/")) bareReferenceNames.add(clean);
+          if (!clean.includes("/")) {
+            bareReferenceNames.add(clean);
+            // Keep unique bare links safe even while Obsidian's cache is unavailable.
+            const paths = pathsByName.get(clean);
+            if (!resolved && paths?.length === 1) referencedPaths.add(paths[0]);
+          }
         });
       }
     }
@@ -1194,12 +1213,12 @@ export default class LocalImagesPlugin extends Plugin {
         }
         const attachFolder: any = this.app.vault.getAbstractFileByPath(oldRootdir)
         const allFolderFiles = attachFolder?.children || []
-        const noteDir = path.dirname(noteFile.path)
         const allVaultFiles = this.app.vault.getFiles()
-        const siblingNotes = allVaultFiles.filter(f => this.ExemplaryOfMD(f.path) && path.dirname(f.path) === noteDir)
+        const referenceFiles = allVaultFiles.filter(f => this.ExemplaryOfMD(f.path) || this.ExemplaryOfCANVAS(f.path))
+        const excludeRenamePaths = parseExcludePaths(this.settings.ExcludeRenameFoldersList)
         const planRename: Array<RenamePlanItem> = []
         for (const f of allFolderFiles) {
-          if (f.children != undefined) {
+          if (f.children != undefined || isPathInExcludedFolders(f.path, excludeRenamePaths)) {
             continue
           }
           const ext = path.extname(f.name)
@@ -1233,9 +1252,9 @@ export default class LocalImagesPlugin extends Plugin {
           return
         }
         const mod = new ModalW1(this.app)
-        mod.messg = translate("Confirm MD5 rename:\r\n  {p} → {p} file(s)\r\n  Notes to update → {p}", [oldRootdir, String(planRename.length), String(siblingNotes.length)])
+        mod.messg = translate("Confirm MD5 rename:\r\n  {p} → {p} file(s)\r\n  Notes to update → {p}", [oldRootdir, String(planRename.length), String(referenceFiles.length)])
         mod.plugin = this
-        mod.callbackFunc = this.renameMD5("execrename", planRename, siblingNotes, { failed: failedCount, skipped: skippedCount })
+        mod.callbackFunc = this.renameMD5("execrename", planRename, referenceFiles, { failed: failedCount, skipped: skippedCount })
         mod.open()
       }
     }
@@ -1248,7 +1267,7 @@ export default class LocalImagesPlugin extends Plugin {
       const subfolderName = obsmediadir.slice(2)
       const excludeRenamePaths = parseExcludePaths(this.settings.ExcludeRenameFoldersList)
       const allVaultFiles = this.app.vault.getFiles()
-      const dirMap = new Map<string, { notes: Array<TFile>, sub: any }>()
+      const dirMap = new Map<string, { sub: any }>()
       for (const file of allVaultFiles) {
         if (!file || !this.ExemplaryOfMD(file.path)) {
           continue
@@ -1261,22 +1280,19 @@ export default class LocalImagesPlugin extends Plugin {
           const subPath = parentPath ? parentPath + "/" + subfolderName : subfolderName
           const sub: any = this.app.vault.getAbstractFileByPath(subPath)
           if (sub && sub.children) {
-            dirMap.set(parentPath, { notes: [], sub })
+            dirMap.set(parentPath, { sub })
           }
-        }
-        if (dirMap.has(parentPath)) {
-          dirMap.get(parentPath).notes.push(file)
         }
       }
       const planRename: Array<RenamePlanItem> = []
       const folderCounts = new Map<string, number>()
-      const allNotesToUpdate: Array<TFile> = []
+      // Exclusions narrow attachment candidates, never the files whose links must be updated.
+      const allNotesToUpdate = allVaultFiles.filter(f => this.ExemplaryOfMD(f.path) || this.ExemplaryOfCANVAS(f.path))
       for (const [parentPath, entry] of dirMap) {
-        const notes = entry.notes
         const sub = entry.sub
         const folderPlan: Array<string> = []
         for (const f of sub.children) {
-          if (f.children != undefined) {
+          if (f.children != undefined || isPathInExcludedFolders(f.path, excludeRenamePaths)) {
             continue
           }
           const ext = path.extname(f.name)
@@ -1307,11 +1323,6 @@ export default class LocalImagesPlugin extends Plugin {
         }
         if (folderPlan.length > 0) {
           folderCounts.set(parentPath, folderPlan.length)
-          for (const n of notes) {
-            if (!allNotesToUpdate.includes(n)) {
-              allNotesToUpdate.push(n)
-            }
-          }
         }
       }
       if (planRename.length == 0) {
@@ -1338,6 +1349,8 @@ export default class LocalImagesPlugin extends Plugin {
         paths.push(file.path);
         originalPathsByName.set(file.name, paths);
       }
+      const originalPaths = new Set(this.app.vault.getFiles().map(file => file.path));
+      const resolvedLinkPaths = new Map<string, string>();
       const normalizeVaultPath = (p: string) => trimAny(normalizePath(String(p || "")), ["\/"])
       const resolveLinkToVaultPath = (notePath: string, linkPath: string) => {
         if (!linkPath) {
@@ -1356,11 +1369,19 @@ export default class LocalImagesPlugin extends Plugin {
         if (!pathPart) {
           return ""
         }
-        if (pathPart.startsWith("/")) {
-          return normalizeVaultPath(pathPart.slice(1))
+        const key = JSON.stringify([notePath, pathPart]);
+        if (resolvedLinkPaths.has(key)) return resolvedLinkPaths.get(key);
+        const resolved = this.app.metadataCache.getFirstLinkpathDest?.(pathPart, notePath);
+        let destination = resolved?.path || "";
+        if (!destination) {
+          const noteDir = normalizeVaultPath(path.dirname(notePath));
+          const candidates = pathPart.startsWith("/") ? [pathPart.slice(1)] : [pathJoin([noteDir, pathPart]), pathPart];
+          destination = candidates.map(normalizeVaultPath).find(p => originalPaths.has(p)) || "";
+          const paths = originalPathsByName.get(pathPart);
+          if (!destination && paths?.length === 1) destination = paths[0];
         }
-        const noteDir = normalizeVaultPath(path.dirname(notePath))
-        return normalizeVaultPath(pathJoin([noteDir, pathPart]))
+        resolvedLinkPaths.set(key, destination);
+        return destination;
       }
       const buildRelativeLink = (notePath: string, targetPath: string) => {
         const noteDir = normalizeVaultPath(path.dirname(notePath))
@@ -1382,11 +1403,7 @@ export default class LocalImagesPlugin extends Plugin {
         const rawLinkClean = rawLinkPart.replace(/^<|>$/g, "")
         const resolvedPath = resolveLinkToVaultPath(note.path, rawLinkClean)
         const oldPath = normalizeVaultPath(item.oldPath)
-        const basePathPart = rawLinkClean.split("#")[0].split("?")[0]
-        const baseNameOnlyMatch = originalPathsByName.get(item.oldName)?.length === 1 && path.basename(basePathPart) === item.oldName &&
-          !basePathPart.includes("/") &&
-          !basePathPart.includes("\\")
-        if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
+        if (resolvedPath !== oldPath) {
           return full
         }
         const suffixMatch = rawLinkClean.match(/([?#].*)$/)
@@ -1413,15 +1430,54 @@ export default class LocalImagesPlugin extends Plugin {
         const cleanPathPart = pathPart.trim()
         const resolvedPath = resolveLinkToVaultPath(note.path, cleanPathPart)
         const oldPath = normalizeVaultPath(item.oldPath)
-        const baseNameOnlyMatch = originalPathsByName.get(item.oldName)?.length === 1 && path.basename(cleanPathPart) === item.oldName &&
-          !cleanPathPart.includes("/") &&
-          !cleanPathPart.includes("\\")
-        if (resolvedPath !== oldPath && !baseNameOnlyMatch) {
+        if (resolvedPath !== oldPath) {
           return full
         }
         const relPath = buildRelativeLink(note.path, item.newPath)
         return opener + relPath + anchorPart + aliasPart + closer
       })
+      const rewriteText = (content: string, note: TFile, items: RenamePlanItem[]) => {
+        for (const item of items) content = rewriteWikiLink(rewriteMdLink(content, note, item), note, item);
+        return content;
+      };
+      const rewriteReferences = (content: string, note: TFile, items: RenamePlanItem[]) => {
+        if (!this.ExemplaryOfCANVAS(note.path)) return rewriteText(content, note, items);
+        const canvas = JSON.parse(content);
+        let changed = false;
+        for (const node of canvas.nodes || []) {
+          if (node.type === "text" && typeof node.text === "string") {
+            const updated = rewriteText(node.text, note, items);
+            if (updated !== node.text) { node.text = updated; changed = true; }
+          } else if (node.type === "file" || node.type === "image") {
+            for (const key of ["file", "url", "path", "source", "image", "media", "link", "attachment", "resource",
+              "data", "value", "content", "filename", "name", "encodedData"]) {
+              if (typeof node[key] !== "string") continue;
+              const resolved = resolveLinkToVaultPath(note.path, node[key]);
+              const item = items.find(item => normalizeVaultPath(item.oldPath) === resolved);
+              if (item) {
+                // Canvas file/image nodes store vault paths; text nodes use relative links.
+                const suffix = node[key].match(/([?#].*)$/)?.[1] || "";
+                node[key] = normalizeVaultPath(item.newPath) + suffix;
+                changed = true;
+              }
+            }
+          }
+        }
+        return changed ? JSON.stringify(canvas, null, 2) : content;
+      };
+      const noteContents = new Map<TFile, string>();
+      let noteFailures = 0;
+      for (const note of notesToUpdate) {
+        try {
+          const content = await this.app.vault.read(note);
+          // Snapshot resolved paths before adapter.rename changes the cache or its TFile objects.
+          rewriteReferences(content, note, filesToRename);
+          noteContents.set(note, content);
+        } catch (e) {
+          noteFailures++;
+          logError("Read note refs failed: " + e);
+        }
+      }
       const renamedItems: RenamePlanItem[] = [];
       const renamedTargets = new Set<string>();
       for (const item of filesToRename) {
@@ -1440,20 +1496,10 @@ export default class LocalImagesPlugin extends Plugin {
           logError("Rename to MD5 failed: " + e);
         }
       }
-      let noteFailures = 0;
-      for (const note of notesToUpdate) {
+      for (const [note, content] of noteContents) {
         try {
-          let filedata = await this.app.vault.read(note)
-          let changed = false
-          for (const item of renamedItems) {
-            const updatedMd = rewriteMdLink(filedata, note, item)
-            const updatedWiki = rewriteWikiLink(updatedMd, note, item)
-            if (updatedWiki !== filedata) {
-              filedata = updatedWiki
-              changed = true
-            }
-          }
-          if (changed) {
+          const filedata = rewriteReferences(content, note, renamedItems);
+          if (filedata !== content) {
             await this.app.vault.modify(note, filedata)
           }
         } catch (e) {

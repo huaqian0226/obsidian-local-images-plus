@@ -19,10 +19,10 @@
 - **两个本地化命令：**插件目录模式扫描当前笔记所在目录的 Markdown 笔记；当前文件为 Canvas 时只扫描该 Canvas。Obsidian 目录模式扫描全库 Markdown 笔记。两者均遵守本地化排除列表，使用各自的目标目录设置。
 - **只读预扫描与确认：**以上批量本地化、孤立附件清理和 MD5 命令先在多行弹窗中显示每篇笔记/每个目录的数量。取消不会写入文件。本地化预扫描区分正文与 YAML，遵守 YAML/Canvas 开关，过滤本地 wiki 链接和排除的 URL，并消除重叠匹配的重复计数。
 - **孤立附件引用：**统计 metadata cache 的 embeds、links、frontmatterLinks，以及 Canvas 的 file/text/image 节点和上游原始内容兜底。同级 `./images` 目录按笔记父目录分组。
-- **孤立附件安全修复：**所有 Markdown 与 Canvas 文件的引用均计入，包括被排除目录中的笔记和当前目录之外的笔记。孤立附件排除列表只限制候选附件路径/目录，不会跳过引用收集，避免误删固定全局附件目录中仍被使用的文件。
-- **MD5 批量重命名：**插件目录模式扫描当前笔记的附件目录；Obsidian 目录模式扫描全库各笔记的同级附件目录。常见 Markdown/wikilink 改写为相对路径，同时保留 query、heading 和 alias 后缀。
+- **孤立附件安全修复：**所有 Markdown 与 Canvas 文件的引用均计入，包括被排除目录中的笔记和当前目录之外的笔记。孤立附件排除列表只限制候选附件路径/目录，不会跳过引用收集，保护固定目录、相对 `./images` 目录和插件 `${notename}` 目录中仍被使用的附件。通过 Obsidian 的 `resolvedLinks` 和 `getFirstLinkpathDest` 解析跨目录的裸文件名/最短链接；缓存不可用时，唯一文件名兜底仍会保护引用。
+- **MD5 批量重命名：**插件目录模式扫描当前笔记的附件目录；Obsidian 目录模式扫描全库各笔记的同级附件目录。全库 Markdown/wikilink（含 YAML）和 Canvas file/image/text 引用均会更新，包括排除目录中的笔记，并保留 query、heading 和 alias 后缀。重命名前解析链接目标，重名附件按 Obsidian 的解析结果区分。
 - **重命名安全修复：**只有成功重命名的文件才进入链接改写列表。已有目标与相同哈希碰撞会跳过，不覆盖文件；发生错误时保留原链接。结果通知统计成功、失败、跳过及笔记更新失败数量。
-- **三组独立目录排除列表：**每行一个完整的库内相对路径，包含子目录；分别控制孤立附件候选、全库 MD5 重命名的笔记目录、两个本地化命令的笔记目录。旧的自动处理目录排除与 URL 正则排除仍独立保留。
+- **三组独立目录排除列表：**每行一个完整的库内相对路径，包含子目录；分别控制孤立附件候选、MD5 附件候选、两个本地化命令的笔记目录。旧的自动处理目录排除与 URL 正则排除仍独立保留。
 - **hq 界面翻译：**命令、设置、预扫描、弹窗和通知使用英文句子键，并提供简体与繁体中文。其他已支持语言缺少 hq 翻译时回退到英文并保留参数。加载时保留现有 `0.16.4-hq.2` 设置。
 
 ## 命令
@@ -35,10 +35,10 @@
 | Localize attachments (Obsidian folder) | 全库未排除的 Markdown 笔记；保存至 Obsidian 配置的目录。 |
 | Remove all orphaned attachments (Plugin folder) | 当前笔记配置的附件目录；全库引用保护候选附件。 |
 | Remove all orphaned attachments (Obsidian folder) | 固定附件目录，或同级 `./images` 分组；跳过排除的候选路径。 |
-| Rename attachments to MD5 (Plugin folder) | 当前笔记的附件目录；改写同目录 Markdown 笔记。 |
-| Rename attachments to MD5 (Obsidian folder) | 所有未排除的笔记目录；要求 Obsidian 附件路径为 `./…`；改写这些目录中的 Markdown 笔记。 |
+| Rename attachments to MD5 (Plugin folder) | 当前笔记的附件目录；遵守重命名排除列表，更新全库 Markdown/YAML/Canvas 引用。 |
+| Rename attachments to MD5 (Obsidian folder) | 所有未排除的附件目录；要求 Obsidian 附件路径为 `./…`；更新全库 Markdown/YAML/Canvas 引用。 |
 
-保留辅助命令：以首个标题命名笔记、将选区编码为 URI、将选中的 HTML 转为 Markdown。MD5 重命名不是通用的 Canvas/跨目录链接迁移工具。批量删除或重命名前请备份附件；重名文件和 HTML 链接会限制孤立附件判断的准确度。
+保留辅助命令：以首个标题命名笔记、将选区编码为 URI、将选中的 HTML 转为 Markdown。MD5 链接更新覆盖 Markdown/wikilink 和 Canvas file/image/text 节点；不改写任意 HTML 引用。批量删除或重命名前请备份附件；重名文件和 HTML 链接会限制孤立附件判断的准确度。
 
 ## 已知上游限制与验证范围
 

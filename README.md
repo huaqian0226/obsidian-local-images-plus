@@ -19,10 +19,10 @@ This branch merges upstream **0.17.1**, commit **`2b4dac116394dfab74a39c2406dea9
 - **Two localize commands:** Plugin-folder mode scans Markdown siblings of the active note; with an active Canvas it scans that Canvas. Obsidian-folder mode scans all Markdown notes in the vault. Both honor the localize exclusion list and use their respective destination settings.
 - **Read-only prescan and confirmation** for these bulk localize, orphan-removal and MD5 commands. The multi-line dialog shows per-note/per-folder counts. Cancel performs no writes. Localization prescan separates body/YAML, follows the YAML and Canvas toggles, filters local wiki links and excluded URLs, and deduplicates overlapping matches.
 - **Orphan references:** include metadata-cache embeds, links and frontmatter links, plus Canvas file/text/image nodes and upstream Canvas content fallback. Sibling `./images` directories are grouped by the note's parent directory.
-- **Orphan safety fix:** references from all Markdown and Canvas files count, including notes in excluded folders and notes outside the active directory. Orphan exclusions limit candidate attachment paths/folders; they never suppress reference collection. This protects in-use files in fixed, vault-wide attachment folders.
-- **MD5 batch rename:** Plugin-folder mode scans the active note's attachment directory; Obsidian-folder mode scans sibling attachment directories vault-wide. Common Markdown/wikilinks are rewritten to relative paths while preserving query, heading and alias suffixes.
+- **Orphan safety fix:** references from all Markdown and Canvas files count, including notes in excluded folders and notes outside the active directory. Orphan exclusions limit candidate attachment paths/folders; they never suppress reference collection. This protects in-use files in fixed folders, relative `./images` folders and plugin `${notename}` folders. Obsidian `resolvedLinks` and `getFirstLinkpathDest` resolve bare/shortest links across directories; a unique-basename fallback also protects links while the cache is unavailable.
+- **MD5 batch rename:** Plugin-folder mode scans the active note's attachment directory; Obsidian-folder mode scans sibling attachment directories vault-wide. Markdown/wikilinks (including YAML) and Canvas file/image/text references are updated vault-wide, including excluded notes, while preserving query, heading and alias suffixes. Link destinations are resolved before renaming, so duplicate basenames follow Obsidian resolution.
 - **Rename safety fix:** only successful renames enter the link-rewrite list. Existing targets and equal-hash collisions are skipped without overwriting; errors retain the original links. The result reports renamed, failed, skipped and note-update failure counts.
-- **Three independent directory exclusions**, one full vault-relative path per line, including subfolders: orphan candidates; note folders for vault-wide MD5 rename; note folders for both localize commands. The older automatic-processing exclusions and URL regex exclusions remain separate.
+- **Three independent directory exclusions**, one full vault-relative path per line, including subfolders: orphan candidates; MD5 attachment candidates; note folders for both localize commands. The older automatic-processing exclusions and URL regex exclusions remain separate.
 - **hq UI translations:** English sentence keys plus simplified and traditional Chinese for commands, settings, previews, dialogs and notices. Other supported languages fall back to English for missing hq keys, with parameters preserved. Existing `0.16.4-hq.2` settings are retained during loading.
 
 ## Commands
@@ -35,10 +35,10 @@ Names below are the English labels; Chinese locales show translated labels.
 | Localize attachments (Obsidian folder) | All non-excluded Markdown notes; Obsidian-configured destination. |
 | Remove all orphaned attachments (Plugin folder) | Current note's configured attachment directory; vault-wide references protect candidates. |
 | Remove all orphaned attachments (Obsidian folder) | Fixed attachment directory or sibling `./images` groups; excluded candidate paths are skipped. |
-| Rename attachments to MD5 (Plugin folder) | Current note's attachment directory; rewrites sibling Markdown notes. |
-| Rename attachments to MD5 (Obsidian folder) | All non-excluded note directories; requires an Obsidian `./…` attachment path; rewrites their Markdown notes. |
+| Rename attachments to MD5 (Plugin folder) | Current note's attachment directory; honors rename exclusions and updates Markdown/YAML/Canvas references vault-wide. |
+| Rename attachments to MD5 (Obsidian folder) | All non-excluded attachment directories; requires an Obsidian `./…` attachment path; updates Markdown/YAML/Canvas references vault-wide. |
 
-Utility commands remain: use the first header as the note name, encode selection as a URI, and convert selected HTML to Markdown. MD5 rename is not a general Canvas/cross-folder link migration tool. Back up attachments before bulk deletion or rename; duplicate basenames and HTML links can limit orphan classification.
+Utility commands remain: use the first header as the note name, encode selection as a URI, and convert selected HTML to Markdown. MD5 link updates cover Markdown/wikilinks and Canvas file/image/text nodes; arbitrary HTML references are not rewritten. Back up attachments before bulk deletion or rename; duplicate basenames and HTML links can limit orphan classification.
 
 ## Known upstream limitation and validation scope
 
