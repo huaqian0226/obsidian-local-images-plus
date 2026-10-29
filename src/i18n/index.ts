@@ -44,7 +44,7 @@ export function translate(key: string, params?: string[]): string {
     if (lang === "en") {
       return params ? formatString(key, params) : key;
     }
-    const trans = dicts[loc][key] || key;
+    const trans = dicts[loc]?.[key] || key;
     return params ? formatString(trans, params) : trans;
   } catch (e) {
     logError("Translation error: " + String(e));

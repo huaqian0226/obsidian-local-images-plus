@@ -43,11 +43,11 @@ export default class SettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: translate("Interface settings") });
 
         new Setting(containerEl)
-            .setName("Excluded folders for orphan deletion")
-            .setDesc("Folders excluded from 'Remove all orphaned attachments (Obsidian folder)'. One path per line.")
+            .setName(translate("Excluded folders for orphan deletion"))
+            .setDesc(translate("Attachment folders excluded from orphan deletion. One path per line; references from all notes still count."))
             .addTextArea(text => {
                 text
-                    .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                    .setPlaceholder(translate("Enter one full folder path per line, e.g. Archive/Keep"))
                     .setValue(this.plugin.settings.ExcludeOrphanFoldersList)
                     .onChange(async (value) => {
                         this.plugin.settings.ExcludeOrphanFoldersList = value;
@@ -59,11 +59,11 @@ export default class SettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName("Excluded folders for MD5 rename")
-            .setDesc("Folders excluded from 'Rename attachments to MD5 (Obsidian folder)'. One path per line.")
+            .setName(translate("Excluded folders for MD5 rename"))
+            .setDesc(translate("Folders excluded from 'Rename attachments to MD5 (Obsidian folder)'. One path per line."))
             .addTextArea(text => {
                 text
-                    .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                    .setPlaceholder(translate("Enter one full folder path per line, e.g. Archive/Keep"))
                     .setValue(this.plugin.settings.ExcludeRenameFoldersList)
                     .onChange(async (value) => {
                         this.plugin.settings.ExcludeRenameFoldersList = value;
@@ -75,11 +75,11 @@ export default class SettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName("Excluded folders for localize")
-            .setDesc("Folders excluded from 'Localize attachments for all your notes'. One path per line.")
+            .setName(translate("Excluded folders for localize"))
+            .setDesc(translate("Note folders excluded from both localize commands. One path per line."))
             .addTextArea(text => {
                 text
-                    .setPlaceholder("Enter the full path in new lines, e.g. 11_ppt-master")
+                    .setPlaceholder(translate("Enter one full folder path per line, e.g. Archive/Keep"))
                     .setValue(this.plugin.settings.ExcludeLocalizeFoldersList)
                     .onChange(async (value) => {
                         this.plugin.settings.ExcludeLocalizeFoldersList = value;

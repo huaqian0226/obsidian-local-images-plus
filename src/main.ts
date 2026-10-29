@@ -94,20 +94,20 @@ export default class LocalImagesPlugin extends Plugin {
 
     this.addCommand({
       id: "download-images",
-      name: "Localize attachments (Plugin folder)",
+      name: translate("Localize attachments (Plugin folder)"),
       callback: this.processActivePage(false),
     });
 
     this.addCommand({
       id: "download-images-def",
-      name: "Localize attachments (Obsidian folder)",
+      name: translate("Localize attachments (Obsidian folder)"),
       callback: this.openProcessAllModal,
     });
 
     if (!this.settings.disAddCom) {
       this.addRibbonIcon(
         "dice",
-        APP_TITLE + "\r\nLocalize attachments (plugin folder)",
+        APP_TITLE + "\r\n" + translate("Localize attachments (Plugin folder)"),
         () => {
           this.processActivePage(false)();
         }
@@ -133,7 +133,7 @@ export default class LocalImagesPlugin extends Plugin {
 
       this.addCommand({
         id: "remove-orphans-from-obsidian-folder",
-        name: "Remove all orphaned attachments (Obsidian folder)",
+        name: translate("Remove all orphaned attachments (Obsidian folder)"),
         callback: () => {
           this.removeOrphans("obsidian")();
         },
@@ -141,19 +141,19 @@ export default class LocalImagesPlugin extends Plugin {
 
       this.addCommand({
         id: "remove-orphans-from-plugin-folder",
-        name: "Remove all orphaned attachments (Plugin folder)",
+        name: translate("Remove all orphaned attachments (Plugin folder)"),
         callback: () => {
           this.removeOrphans("plugin")();
         },
       });
       this.addCommand({
         id: "rename-attachments-md5-plugin",
-        name: "Rename attachments to MD5 (Plugin folder)",
+        name: translate("Rename attachments to MD5 (Plugin folder)"),
         callback: () => { this.renameMD5("plugin")(); },
       });
       this.addCommand({
         id: "rename-attachments-md5-obsidian",
-        name: "Rename attachments to MD5 (Obsidian folder)",
+        name: translate("Rename attachments to MD5 (Obsidian folder)"),
         callback: () => { this.renameMD5("obsidian")(); },
       });
     }
@@ -677,17 +677,17 @@ export default class LocalImagesPlugin extends Plugin {
     try {
       const activeFile = this.getCurrentNote()
       if (!activeFile) {
-        showBalloon("Please select a note or click inside selected note in canvas.", this.settings.showNotifications)
+        showBalloon(translate("Please select a note or click inside selected note in canvas."), this.settings.showNotifications)
         return
       }
       if (!this.ExemplaryOfMD(activeFile.path) && !this.ExemplaryOfCANVAS(activeFile.path)) {
-        showBalloon("Please, select a markdown note first.", this.settings.showNotifications)
+        showBalloon(translate("Please, select a markdown note first."), this.settings.showNotifications)
         return
       }
       const noteParentPath = path.dirname(activeFile.path)
       const excludeLocalizePaths = parseExcludePaths(this.settings.ExcludeLocalizeFoldersList)
       if (isPathInExcludedFolders(noteParentPath, excludeLocalizePaths)) {
-        showBalloon("This folder is excluded from localize.", this.settings.showNotifications)
+        showBalloon(translate("This folder is excluded from localize."), this.settings.showNotifications)
         return
       }
       // Folder-level scan: every markdown note that shares the active note's folder.
@@ -700,17 +700,17 @@ export default class LocalImagesPlugin extends Plugin {
           noteList.push({ file, matchCount })
       }
       if (noteList.length == 0) {
-        showBalloon("No remote attachments found in \"" + noteParentPath + "\" — nothing to localize.", this.settings.showNotifications)
+        showBalloon(translate("No remote attachments found in \"{p}\" — nothing to localize.", [noteParentPath]), this.settings.showNotifications)
         return
       }
       noteList.sort((a, b) => a.file.path.localeCompare(b.file.path))
       const totalLinks = noteList.reduce((s, n) => s + n.matchCount, 0)
       let detail = ""
       for (const { file, matchCount } of noteList) {
-        detail += "\r\n  " + file.path + "  →  " + matchCount + " link(s)"
+        detail += "\r\n  " + translate("{p} → {p} link(s)", [file.path, String(matchCount)])
       }
       const mod = new ModalW1(this.app)
-      mod.messg = "Localize " + totalLinks + " remote link(s) across " + noteList.length + " note(s) in folder:\r\n  " + noteParentPath + detail + "\r\n      "
+      mod.messg = translate("Localize {p} remote link(s) across {p} note(s) in folder:\r\n  {p}", [String(totalLinks), String(noteList.length), noteParentPath]) + detail
       mod.plugin = this
       const filesToProcess = noteList.map(x => x.file)
       const _dd = defaultdir
@@ -721,7 +721,7 @@ export default class LocalImagesPlugin extends Plugin {
       }
       mod.open()
     } catch (e) {
-      showBalloon(`Please select a note or click inside selected note in canvas.`, this.settings.showNotifications)
+      showBalloon(translate("Please select a note or click inside selected note in canvas."), this.settings.showNotifications)
       return
     }
   }
@@ -927,7 +927,7 @@ export default class LocalImagesPlugin extends Plugin {
       if (!noteFile) {
         noteFile = this.getCurrentNote()
         if (!noteFile) {
-          showBalloon("Please, select a note or click inside a note in canvas!", this.settings.showNotifications)
+          showBalloon(translate("Please, select a note or click inside a note in canvas!"), this.settings.showNotifications)
           return
         }
       }
@@ -937,7 +937,7 @@ export default class LocalImagesPlugin extends Plugin {
         // Use the note's actual attachment dir (handles ./images and ${notename} alike).
         const oldRootdir = await getMDir(this.app, noteFile, this.settings)
         if (! await this.app.vault.exists(oldRootdir)) {
-          showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications)
+          showBalloon(translate("The attachment folder {p} does not exist!", [oldRootdir]), this.settings.showNotifications)
           return
         }
         const attachFolder: any = this.app.vault.getAbstractFileByPath(oldRootdir)
@@ -958,19 +958,19 @@ export default class LocalImagesPlugin extends Plugin {
         }
         if (orphanedAttachments.length > 0) {
           const mod = new ModalW1(this.app)
-          mod.messg = "Confirm remove orphaned attachments:\r\n  " + oldRootdir + "  →  " + orphanedAttachments.length + " file(s)\r\n      "
+          mod.messg = translate("Confirm removal of orphaned attachments:") + "\r\n  " + translate("{p} → {p} file(s)", [oldRootdir, String(orphanedAttachments.length)])
           mod.plugin = this
           mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
           mod.open()
         } else {
-          showBalloon("No orphaned files found!", this.settings.showNotifications)
+          showBalloon(translate("No orphaned files found!"), this.settings.showNotifications)
         }
       }
     }
 
     if (type == "obsidian") {
       if (obsmediadir == "/") {
-        showBalloon("This command cannot run on vault root.\nPlease, change settings first!\r\n", this.settings.showNotifications)
+        showBalloon(translate("This command cannot run on vault root.\nPlease, change settings first!\r\n"), this.settings.showNotifications)
         return
       }
 
@@ -978,7 +978,7 @@ export default class LocalImagesPlugin extends Plugin {
         // Per-note sibling attachment dir (e.g. "./images"): scan folder-by-folder.
         const subfolderName = obsmediadir.slice(2)
         if (!subfolderName.length) {
-          showBalloon("Invalid Obsidian attachment folder path.\r\n", this.settings.showNotifications)
+          showBalloon(translate("Invalid Obsidian attachment folder path.\r\n"), this.settings.showNotifications)
           return
         }
         const usedByParentFolder = new Map<string, Set<string>>()
@@ -1041,15 +1041,15 @@ export default class LocalImagesPlugin extends Plugin {
         if (orphanedAttachments.length > 0) {
           let detail = ""
           for (const [p, cnt] of Array.from(folderCounts.entries()).sort()) {
-            detail += "\r\n  " + p + "  →  " + cnt + " file(s)"
+            detail += "\r\n  " + translate("{p} → {p} file(s)", [p, String(cnt)])
           }
           const mod = new ModalW1(this.app)
-          mod.messg = "Confirm remove orphaned attachments:" + detail + "\r\n      "
+          mod.messg = translate("Confirm removal of orphaned attachments:") + detail
           mod.plugin = this
           mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
           mod.open()
         } else {
-          showBalloon("No orphaned files found!", this.settings.showNotifications)
+          showBalloon(translate("No orphaned files found!"), this.settings.showNotifications)
         }
       } else {
         // Fixed global attachment folder.
@@ -1076,12 +1076,12 @@ export default class LocalImagesPlugin extends Plugin {
         logError(orphanedAttachments, true)
         if (orphanedAttachments.length > 0) {
           const mod = new ModalW1(this.app)
-          mod.messg = "Confirm remove orphaned attachments:\r\n  " + obsmediadir + "  →  " + orphanedAttachments.length + " file(s)\r\n  NOTE: Be careful when running this command on Obsidian attachments folder, since some html-linked files may also be moved.\r\n      "
+          mod.messg = translate("Confirm removal of orphaned attachments:") + "\r\n  " + translate("{p} → {p} file(s)", [obsmediadir, String(orphanedAttachments.length)]) + "\r\n" + translate("HTML-linked files may also be selected. Review the candidates before confirming.")
           mod.plugin = this
           mod.callbackFunc = this.removeOrphans("execremove", orphanedAttachments)
           mod.open()
         } else {
-          showBalloon("No orphaned files found!", this.settings.showNotifications)
+          showBalloon(translate("No orphaned files found!"), this.settings.showNotifications)
         }
       }
     }
@@ -1096,13 +1096,13 @@ export default class LocalImagesPlugin extends Plugin {
         filesToRemove.forEach((el: TFile) => {
 
           if (remcompl) {
-            msg = "were deleted completely."
+            msg = translate("{p} file(s) were deleted completely.", [String(filesToRemove.length)])
             this.app.vault.delete(el, true)
           } else {
             if (useSysTrash) {
-              msg = "were moved to the system garbage can."
+              msg = translate("{p} file(s) were moved to the system garbage can.", [String(filesToRemove.length)])
             } else {
-              msg = "were moved to the Obsidian garbage can."
+              msg = translate("{p} file(s) were moved to the Obsidian garbage can.", [String(filesToRemove.length)])
             }
             this.app.vault.trash(el, useSysTrash)
           }
@@ -1110,7 +1110,7 @@ export default class LocalImagesPlugin extends Plugin {
         })
       }
 
-      showBalloon(filesToRemove.length + " file(s) " + msg, this.settings.showNotifications)
+      showBalloon(msg, this.settings.showNotifications)
 
     }
 
@@ -1131,17 +1131,17 @@ export default class LocalImagesPlugin extends Plugin {
       }
     }
     if (noteList.length == 0) {
-      showBalloon("No remote attachments found across all notes — nothing to localize.", this.settings.showNotifications)
+      showBalloon(translate("No remote attachments found across all notes — nothing to localize."), this.settings.showNotifications)
       return
     }
     noteList.sort((a, b) => a.file.path.localeCompare(b.file.path))
     const totalLinks = noteList.reduce((s, n) => s + n.matchCount, 0)
     let detail = ""
     for (const { file, matchCount } of noteList) {
-      detail += "\r\n  " + file.path + "  →  " + matchCount + " link(s)"
+      detail += "\r\n  " + translate("{p} → {p} link(s)", [file.path, String(matchCount)])
     }
     const mod = new ModalW1(this.app)
-    mod.messg = "Localize " + totalLinks + " remote link(s) across " + noteList.length + " note(s)" + detail + "\r\n      "
+    mod.messg = translate("Localize {p} remote link(s) across {p} note(s)", [String(totalLinks), String(noteList.length)]) + detail
     mod.plugin = this
     const filesToProcess = noteList.map(x => x.file)
     mod.callbackFunc = async () => {
@@ -1160,7 +1160,7 @@ export default class LocalImagesPlugin extends Plugin {
     let failedCount = prescan.failed;
     let skippedCount = prescan.skipped;
     const reportSummary = (renamed: number, noteFailures: number = 0) => showBalloon(
-      renamed + " attachment(s) renamed to MD5 format. " + failedCount + " failed, " + skippedCount + " skipped. " + noteFailures + " note update(s) failed.",
+      translate("{p} attachment(s) renamed to MD5 format. {p} failed, {p} skipped. {p} note update(s) failed.", [String(renamed), String(failedCount), String(skippedCount), String(noteFailures)]),
       this.settings.showNotifications
     );
 
@@ -1170,24 +1170,24 @@ export default class LocalImagesPlugin extends Plugin {
         if (obsmediadir.slice(0, 2) === "./") {
           oldRootdir = obsmediadir.slice(2)
         } else {
-          showBalloon("This command requires a per-note attachment path (e.g. './images').\nUse 'Rename attachments to MD5 (Obsidian folder)' for global folders.\r\n", this.settings.showNotifications)
+          showBalloon(translate("This command requires a per-note attachment path (e.g. './images').\nUse 'Rename attachments to MD5 (Obsidian folder)' to scan all sibling folders.\r\n"), this.settings.showNotifications)
           return
         }
       }
       if (oldRootdir.includes("${date}")) {
-        showBalloon("Path pattern cannot contain ${date}.\nPlease change the mediaRootDir setting.\r\n", this.settings.showNotifications)
+        showBalloon(translate("Path pattern cannot contain ${date}.\nPlease change the mediaRootDir setting.\r\n"), this.settings.showNotifications)
         return
       }
       const noteFile = this.getCurrentNote()
       if (!noteFile) {
-        showBalloon("Please, select a note or click inside a note in canvas!", this.settings.showNotifications)
+        showBalloon(translate("Please, select a note or click inside a note in canvas!"), this.settings.showNotifications)
         return
       }
       if (this.ExemplaryOfMD(noteFile.path)) {
         oldRootdir = oldRootdir.replace("${notename}", path.parse(noteFile.path)?.name)
         oldRootdir = trimAny(pathJoin([path.parse(noteFile.path)?.dir, oldRootdir]), ["\/"])
         if (! await this.app.vault.adapter.exists(oldRootdir)) {
-          showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications)
+          showBalloon(translate("The attachment folder {p} does not exist!", [oldRootdir]), this.settings.showNotifications)
           return
         }
         const attachFolder: any = this.app.vault.getAbstractFileByPath(oldRootdir)
@@ -1227,11 +1227,11 @@ export default class LocalImagesPlugin extends Plugin {
         }
         if (planRename.length == 0) {
           if (failedCount || skippedCount) reportSummary(0);
-          else showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
+          else showBalloon(translate("All attachments already in MD5 format!"), this.settings.showNotifications)
           return
         }
         const mod = new ModalW1(this.app)
-        mod.messg = "Confirm MD5 rename:\r\n  " + oldRootdir + "  →  " + planRename.length + " file(s)\r\n  Notes to update  →  " + siblingNotes.length + "\r\n      "
+        mod.messg = translate("Confirm MD5 rename:\r\n  {p} → {p} file(s)\r\n  Notes to update → {p}", [oldRootdir, String(planRename.length), String(siblingNotes.length)])
         mod.plugin = this
         mod.callbackFunc = this.renameMD5("execrename", planRename, siblingNotes, { failed: failedCount, skipped: skippedCount })
         mod.open()
@@ -1240,7 +1240,7 @@ export default class LocalImagesPlugin extends Plugin {
 
     if (type == "obsidian") {
       if (obsmediadir.slice(0, 2) !== "./") {
-        showBalloon("This command requires a per-note attachment path (e.g. './images').\r\n", this.settings.showNotifications)
+        showBalloon(translate("This command requires a per-note attachment path (e.g. './images').\r\n"), this.settings.showNotifications)
         return
       }
       const subfolderName = obsmediadir.slice(2)
@@ -1314,15 +1314,15 @@ export default class LocalImagesPlugin extends Plugin {
       }
       if (planRename.length == 0) {
         if (failedCount || skippedCount) reportSummary(0);
-        else showBalloon("All attachments already in MD5 format!", this.settings.showNotifications)
+        else showBalloon(translate("All attachments already in MD5 format!"), this.settings.showNotifications)
         return
       }
       let detail = ""
       for (const [p, cnt] of Array.from(folderCounts.entries()).sort()) {
-        detail += "\r\n  " + (p || "(vault root)") + "/" + subfolderName + "/  →  " + cnt + " file(s)"
+        detail += "\r\n  " + translate("{p} → {p} file(s)", [(p || translate("(vault root)")) + "/" + subfolderName + "/", String(cnt)])
       }
       const mod = new ModalW1(this.app)
-      mod.messg = "Rename " + planRename.length + " attachment(s) to MD5 format (" + dirMap.size + " folder(s) scanned)" + detail + "\r\n      "
+      mod.messg = translate("Rename {p} attachment(s) to MD5 format ({p} folder(s) scanned)", [String(planRename.length), String(dirMap.size)]) + detail
       mod.plugin = this
       mod.callbackFunc = this.renameMD5("execrename", planRename, allNotesToUpdate, { failed: failedCount, skipped: skippedCount })
       mod.open()

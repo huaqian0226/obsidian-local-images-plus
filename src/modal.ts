@@ -1,5 +1,6 @@
 import { App, Modal } from "obsidian";
 import { APP_TITLE } from "./config";
+import { translate } from "./i18n/index";
 import LocalImagesPlugin from "./main";
 
 
@@ -26,7 +27,7 @@ export class ModalW1 extends Modal {
 
 		contentEl.createEl("button", {
 			cls: ["mod-cta"],
-			text: "Cancel"
+			text: translate("Cancel")
 		}).addEventListener("click", async () => {
 			this.close();
 		});
@@ -34,7 +35,7 @@ export class ModalW1 extends Modal {
 
 		contentEl.createEl("button", {
 			cls: ["mod-cta"],
-			text: "Confirm"
+			text: translate("Confirm")
 		}).addEventListener("click", async () => {
 			 
 			this.close();
@@ -72,7 +73,7 @@ export class ModalW2 extends Modal {
 
  		contentEl.createEl("button", {
 			cls: ["mod-cta"],
-			text: "OK"
+			text: translate("OK")
 		}).addEventListener("click", async () => {
 			 
 			this.close();
