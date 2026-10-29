@@ -918,7 +918,7 @@ export default class LocalImagesPlugin extends Plugin {
         });
       }
     }
-    const isReferenced = (attachment: TFile) => referencedPaths.has(attachment.path) || bareReferenceNames.has(attachment.name);
+    const isReferenced = (attachment: TFile, includeBareNames: boolean = true) => referencedPaths.has(attachment.path) || (includeBareNames && bareReferenceNames.has(attachment.name));
 
     if (type == "plugin") {
       let orphanedAttachments = []
@@ -942,16 +942,18 @@ export default class LocalImagesPlugin extends Plugin {
         }
         const attachFolder: any = this.app.vault.getAbstractFileByPath(oldRootdir)
         const allAttachments = attachFolder?.children || []
-        // Folder-level: collect links from every note/canvas sharing this folder.
+        const fixedAttachmentFolder = this.settings.saveAttE === "inFolderBelow" ||
+          (this.settings.saveAttE !== "nextToNoteS" && !obsmediadir.startsWith("./"));
+        // Bare-name fallback stays scoped for sibling folders; explicit paths were counted vault-wide.
         for (const file of allFiles) {
           const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
-          if ((!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+          if ((!fixedAttachmentFolder && parentPath !== noteParentPath) || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
             continue
           }
           await collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue))
         }
         for (const attach of allAttachments) {
-          if (!isOrphanExcluded(attach.path) && !isReferenced(attach) && !allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
+          if (!isOrphanExcluded(attach.path) && !isReferenced(attach, fixedAttachmentFolder) && !allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
             logError("orph: " + attach.basename)
             orphanedAttachments.push(attach)
           }
@@ -1029,7 +1031,7 @@ export default class LocalImagesPlugin extends Plugin {
             if (attach.children != undefined) {
               continue
             }
-            if (!isOrphanExcluded(attach.path) && !isReferenced(attach) && !usedSet.has(attach.name)) {
+            if (!isOrphanExcluded(attach.path) && !isReferenced(attach, false) && !usedSet.has(attach.name)) {
               orphanedAttachments.push(attach)
               folderOrphanCount++
             }

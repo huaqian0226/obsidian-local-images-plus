@@ -396,3 +396,11 @@ test('KNOWN upstream Canvas bare URL bug remains reproducible (not fixed in fork
     assert.deepEqual(x.writes, []);
   } finally { cp.imageTagProcessor = originalProcessor; }
 });
+
+test('sibling ./images grouping keeps Canvas basename fallback in its own parent', async () => {
+  const x = setup(['A/a.md', 'A/board.canvas', 'B/b.md', 'A/images/shared.png', 'B/images/shared.png'], {
+    'A/board.canvas': JSON.stringify({ nodes: [{ type: 'image', url: 'A/images/shared.png' }] }),
+  });
+  await x.plugin.removeOrphans('obsidian')(); await confirm();
+  assert.deepEqual(deletedPaths(x), ['B/images/shared.png']);
+});
