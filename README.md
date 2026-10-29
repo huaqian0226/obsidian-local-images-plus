@@ -1,88 +1,81 @@
-# Local Images Plus — `my-features` fork
+# Local Images Plus — hq fork
 
-> English | [简体中文](./README.zh-CN.md)
+English | [简体中文](./README.zh-CN.md)
 
-A personal fork of the excellent **[Local Images Plus](https://github.com/Sergei-Korneev/obsidian-local-images-plus)** plugin for [Obsidian](https://obsidian.md/), customized to fit my own vault and workflow.
+Personal fork: [huaqian0226/obsidian-local-images-plus](https://github.com/huaqian0226/obsidian-local-images-plus), branch `my-features`, maintained by hq. The original [Local Images Plus](https://github.com/Sergei-Korneev/obsidian-local-images-plus) provides the media-localization engine. This fork is independent of upstream and is not a separate Community Store entry.
 
-The base plugin downloads/localizes external media in your notes, saves attachments locally, de-duplicates them via MD5, and removes orphaned attachments. **All of that credit goes to the original authors** (see [Acknowledgements](#acknowledgements)). This fork only adds a few quality-of-life changes on top.
+This branch merges upstream **0.17.1**, commit **`2b4dac116394dfab74a39c2406dea963b890bed4`**. The next planned personal version is **`0.17.1-hq.1`**; it has **not been released by this merge**. Version metadata remains `0.16.4-hq.2` until the coordinator's separate version commit.
 
-> ⚠️ This fork is **not** affiliated with the original project and is **not** published to the Obsidian Community Store. It is maintained for personal use. Use at your own risk and **keep backups** — several commands modify or delete files in bulk.
+## Upstream features retained (0.17.1)
 
----
+- Download/localize external media, clipboard content and local document attachments; automatic processing and attachment-folder management.
+- Filename templates: `${md5}`, `${md5:N}`, `${originalname}`, `${notename}`, `${date}`, `${unique}`. Legacy `useMD5ForNewAtt` migrates to `FileNameTemplate` without changing its naming choice.
+- Optional YAML media downloads, source/referer handling and preservation of disabled frontmatter.
+- Right-click single-image download, editor-drop handling and Canvas localization with its own toggle.
+- `UrlExcludeRegexps`, improved Markdown/wikilink parsing, and upstream internationalization.
 
-## What this fork adds
+## hq additions and safety fixes
 
-- **Confirm-before-run for every bulk action.** Localize, orphan removal, and MD5 rename now **pre-scan**, show exactly what will be affected (per-note / per-folder counts, one item per line in a scrollable dialog), and ask for confirmation **before** touching any file.
-
-- **Localize is now folder / vault aware:**
-  - `Localize attachments (Plugin folder)` scans **every note in the current note's folder**, not just the active note.
-  - `Localize attachments (Obsidian folder)` scans the **whole vault** and honors the localize exclude list.
-  - The old third "all notes" command was merged in — there are now **2 localize commands instead of 3**.
-
-- **New — Rename attachments to MD5:**
-  - `Rename attachments to MD5 (Plugin folder)` and `Rename attachments to MD5 (Obsidian folder)` rename attachments to their MD5 signature and **rewrite note links to relative paths**.
-
-- **Smarter orphan removal:**
-  - Supports per-note sibling attachment folders (e.g. `./images`), grouping and reporting orphans **per folder**.
-  - Plugin-folder mode scans all notes that share the folder's attachment directory.
-
-- **Exclude-folder settings** (one path per line, in the plugin settings tab):
-  - *Excluded folders for orphan deletion*
-  - *Excluded folders for MD5 rename*
-  - *Excluded folders for localize*
-
-> **ℹ️ Orphan detection coverage:** before deciding what is unused, orphan detection now collects references from each note's **body embeds/links**, its **YAML frontmatter links** (e.g. `banner` / cover properties), and **canvas files** — across *every* note in scope, not just the active note. This is broader than the original (which only checked the active note's references), so it should produce fewer false positives. It is still a delete operation, so keep backups and test on a sample folder first.
-
----
+- **Two localize commands:** Plugin-folder mode scans Markdown siblings of the active note; with an active Canvas it scans that Canvas. Obsidian-folder mode scans all Markdown notes in the vault. Both honor the localize exclusion list and use their respective destination settings.
+- **Read-only prescan and confirmation** for these bulk localize, orphan-removal and MD5 commands. The multi-line dialog shows per-note/per-folder counts. Cancel performs no writes. Localization prescan separates body/YAML, follows the YAML and Canvas toggles, filters local wiki links and excluded URLs, and deduplicates overlapping matches.
+- **Orphan references:** include metadata-cache embeds, links and frontmatter links, plus Canvas file/text/image nodes and upstream Canvas content fallback. Sibling `./images` directories are grouped by the note's parent directory.
+- **Orphan safety fix:** references from all Markdown and Canvas files count, including notes in excluded folders and notes outside the active directory. Orphan exclusions limit candidate attachment paths/folders; they never suppress reference collection. This protects in-use files in fixed, vault-wide attachment folders.
+- **MD5 batch rename:** Plugin-folder mode scans the active note's attachment directory; Obsidian-folder mode scans sibling attachment directories vault-wide. Common Markdown/wikilinks are rewritten to relative paths while preserving query, heading and alias suffixes.
+- **Rename safety fix:** only successful renames enter the link-rewrite list. Existing targets and equal-hash collisions are skipped without overwriting; errors retain the original links. The result reports renamed, failed, skipped and note-update failure counts.
+- **Three independent directory exclusions**, one full vault-relative path per line, including subfolders: orphan candidates; note folders for vault-wide MD5 rename; note folders for both localize commands. The older automatic-processing exclusions and URL regex exclusions remain separate.
+- **hq UI translations:** English sentence keys plus simplified and traditional Chinese for commands, settings, previews, dialogs and notices. Other supported languages fall back to English for missing hq keys, with parameters preserved. Existing `0.16.4-hq.2` settings are retained during loading.
 
 ## Commands
 
-| Command | What it does |
+Names below are the English labels; Chinese locales show translated labels.
+
+| Command | Scope and destination |
 | --- | --- |
-| **Localize attachments (Plugin folder)** | Localize remote attachments for every note in the current note's folder (saves to the plugin-configured folder). |
-| **Localize attachments (Obsidian folder)** | Localize remote attachments across the whole vault (saves to the Obsidian-configured folder); respects the localize exclude list. |
-| **Remove all orphaned attachments (Plugin folder)** | Remove unused attachments in the current folder's attachment directory. |
-| **Remove all orphaned attachments (Obsidian folder)** | Remove unused attachments vault-wide; supports `./images`-style per-note folders; respects the orphan exclude list. |
-| **Rename attachments to MD5 (Plugin folder)** | Rename the current note's attachments to MD5 and rewrite references to relative paths. |
-| **Rename attachments to MD5 (Obsidian folder)** | Rename per-note attachments vault-wide to MD5; respects the MD5 exclude list. |
+| Localize attachments (Plugin folder) | Current directory's Markdown notes, or active Canvas; plugin-configured destination. |
+| Localize attachments (Obsidian folder) | All non-excluded Markdown notes; Obsidian-configured destination. |
+| Remove all orphaned attachments (Plugin folder) | Current note's configured attachment directory; vault-wide references protect candidates. |
+| Remove all orphaned attachments (Obsidian folder) | Fixed attachment directory or sibling `./images` groups; excluded candidate paths are skipped. |
+| Rename attachments to MD5 (Plugin folder) | Current note's attachment directory; rewrites sibling Markdown notes. |
+| Rename attachments to MD5 (Obsidian folder) | All non-excluded note directories; requires an Obsidian `./…` attachment path; rewrites their Markdown notes. |
 
-The original utility commands are kept too (set first header as note name, convert selection to URI, convert HTML selection to Markdown).
+Utility commands remain: use the first header as the note name, encode selection as a URI, and convert selected HTML to Markdown. MD5 rename is not a general Canvas/cross-folder link migration tool. Back up attachments before bulk deletion or rename; duplicate basenames and HTML links can limit orphan classification.
 
----
+## Known upstream limitation and validation scope
 
-## Install (personal fork)
+The upstream Canvas **bare-URL** localization branch is intentionally unchanged: passing its single regex to `replaceAsync` can throw `regex.forEach is not a function`. A Canvas containing `{"nodes":[{"type":"link","url":"https://example.com/x.png"}]}` reproduces this when the first Markdown-pattern pass changes nothing. This also remains a TypeScript diagnostic.
 
-This fork is installed manually or via BRAT, not from the Community Store.
+Automated tests use an in-memory vault and stub Obsidian APIs. Actual Obsidian enable/disable, network downloads, editor-drop/right-click behavior and BRAT installation have not been validated for this merged build. The build emits JavaScript but upstream TypeScript diagnostics remain; passing `npm test` does not mean this Canvas bug is fixed (its test asserts the known error).
 
-- **BRAT (recommended):** in BRAT, *Add Beta plugin* → `huaqian0226/obsidian-local-images-plus`. Releases are tagged `<upstream>-hq.N` (current: `0.16.4-hq.2`). If you previously installed `hq.1`, remove and re-add it once so BRAT picks up `hq.2` — the old `hq.1` release reported its version as plain `0.16.4`.
-- **Manual:**
-  1. Build (see below), which outputs to `obsidian_local_images_plus_latest/`.
-  2. Copy `main.js`, `manifest.json`, and `styles.css` into `<your-vault>/.obsidian/plugins/obsidian-local-images-plus/`.
-  3. Restart Obsidian and enable the plugin in **Community plugins**.
-- To avoid conflicts, disable the original *Local Images Plus* / *obsidian-local-images* if installed.
+## BRAT installation — after the upcoming release
 
-## Build from source
+`0.17.1-hq.1` is a planned release, not an available asset promised by this README. After the coordinator publishes its installable assets:
 
-```bash
-npm install
-npm run build   # production build → obsidian_local_images_plus_latest/
-npm run dev     # watch / rebuild on change
+1. Back up existing plugin settings/data. The fork keeps the original plugin ID, `obsidian-local-images-plus`; it replaces the original instance rather than installing alongside it.
+2. In **Settings → BRAT → Add beta plugin**, enter `huaqian0226/obsidian-local-images-plus`.
+3. Select the published `v0.17.1-hq.1` release when available, install and enable it. Confirm the installed version and retained settings before bulk operations.
+
+Local builds output `main.js`, `manifest.json` and `styles.css` in `obsidian_local_images_plus_latest/`. This merge does not deploy them to a vault.
+
+## Development
+
+```sh
+npm ci
+npm run build
+node --check obsidian_local_images_plus_latest/main.js
+npm test
+npx tsc --noEmit -p .
 ```
 
-> Source lives in `src/*.ts`. `main.js` is generated — never edit it by hand; change the source and rebuild.
+The final command currently reports upstream diagnostics. No dependencies were upgraded for the merge or tests. Edit TypeScript under `src/`; never hand-edit the generated bundle. `npm run version` synchronizes manifests and `versions.json` from `package.json`; version changes are a separate maintainer step.
 
----
+## Acknowledgements and license
 
-## Acknowledgements
-
-Huge thanks to **[Sergei Korneev](https://github.com/Sergei-Korneev)** and the original *Local Images Plus*, which does all the heavy lifting this fork builds on — and to the lineage it grew from:
+Original authors: **catalysm, aleksey-rezvov, Sergei Korneev**. Original plugin ID and authors remain unchanged. Upstream lineage:
 
 - [niekcandaele/obsidian-local-images](https://github.com/niekcandaele/obsidian-local-images)
 - [aleksey-rezvov/obsidian-local-images](https://github.com/aleksey-rezvov/obsidian-local-images)
-- [Sergei-Korneev/obsidian-local-images-plus](https://github.com/Sergei-Korneev/obsidian-local-images-plus) (author credits: *catalysm, aleksey-rezvov, Sergei Korneev*)
+- [Sergei-Korneev/obsidian-local-images-plus](https://github.com/Sergei-Korneev/obsidian-local-images-plus)
 
-If you find the base plugin useful, please support the original author: [Buy Me a Coffee](https://www.buymeacoffee.com/sergeikorneev).
+Support the upstream author: [Buy Me a Coffee](https://www.buymeacoffee.com/sergeikorneev).
 
-## License
-
-This fork inherits the original project's license — see [`LICENSE`](./LICENSE). All original copyright and attribution remain with the upstream authors.
+By using this software, you accept the terms of the original [license agreement](./LICENSE). The author is not obligated to provide support and assumes no liability. This fork inherits the original license; all original copyright and attribution notices are retained.
