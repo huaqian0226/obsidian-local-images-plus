@@ -1144,7 +1144,7 @@ export default class LocalImagesPlugin extends Plugin {
 
   // Rename attachments to their MD5 signature and rewrite note references to relative paths.
   private renameMD5 = (type: string, filesToRename: Array<RenamePlanItem> = undefined, notesToUpdate: Array<TFile> = undefined) => async () => {
-    const obsmediadir = app.vault.getConfig("attachmentFolderPath")
+    const obsmediadir = (this.app.vault as typeof this.app.vault & { getConfig(key: string): string }).getConfig("attachmentFolderPath")
 
     if (type == "plugin") {
       let oldRootdir = this.settings.mediaRootDir
@@ -1168,7 +1168,7 @@ export default class LocalImagesPlugin extends Plugin {
       if (this.ExemplaryOfMD(noteFile.path)) {
         oldRootdir = oldRootdir.replace("${notename}", path.parse(noteFile.path)?.name)
         oldRootdir = trimAny(pathJoin([path.parse(noteFile.path)?.dir, oldRootdir]), ["\/"])
-        if (! await this.app.vault.exists(oldRootdir)) {
+        if (! await this.app.vault.adapter.exists(oldRootdir)) {
           showBalloon("The attachment folder " + oldRootdir + " does not exist!", this.settings.showNotifications)
           return
         }
@@ -1186,7 +1186,7 @@ export default class LocalImagesPlugin extends Plugin {
           if (path.basename(f.name, ext).endsWith("_MD5")) {
             continue
           }
-          const binData = await readFromDisk(pathJoin([this.app.vault.adapter.basePath, f.path]))
+          const binData = await readFromDisk(pathJoin([(this.app.vault.adapter as typeof this.app.vault.adapter & { basePath: string }).basePath, f.path]))
           if (!binData) {
             continue
           }
@@ -1259,7 +1259,7 @@ export default class LocalImagesPlugin extends Plugin {
           if (path.basename(f.name, ext).endsWith("_MD5")) {
             continue
           }
-          const binData = await readFromDisk(pathJoin([this.app.vault.adapter.basePath, f.path]))
+          const binData = await readFromDisk(pathJoin([(this.app.vault.adapter as typeof this.app.vault.adapter & { basePath: string }).basePath, f.path]))
           if (!binData) {
             continue
           }

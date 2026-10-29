@@ -2,7 +2,7 @@ import typescript from "@rollup/plugin-typescript";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 import rollupJson from "@rollup/plugin-json";
 import commonjs from "@rollup/plugin-commonjs";
-import execute from "rollup-plugin-execute";
+import { mkdirSync, copyFileSync } from "fs";
 import path from "path";
 
 const isProd = process.env.BUILD === "production";
@@ -27,11 +27,16 @@ export default {
   },
   external: ["obsidian"],
   plugins: [
-    execute([
-      ` mkdir -p ${currentDir}/obsidian_local_images_plus_latest`,
-      ` cp -u ${currentDir}/manifest.json ${currentDir}/obsidian_local_images_plus_latest/manifest.json`,
-      ` cp -u ${currentDir}/styles.css ${currentDir}/obsidian_local_images_plus_latest/styles.css`,
-    ]),
+    {
+      name: "copy-plugin-assets",
+      buildStart() {
+        const outputDir = path.join(currentDir, "obsidian_local_images_plus_latest");
+        mkdirSync(outputDir, { recursive: true });
+        for (const asset of ["manifest.json", "styles.css"]) {
+          copyFileSync(path.join(currentDir, asset), path.join(outputDir, asset));
+        }
+      },
+    },
     typescript(),
     nodeResolve({ browser: true }),
     rollupJson(),

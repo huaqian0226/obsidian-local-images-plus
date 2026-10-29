@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "rollup --config rollup.config.js -w",
     "build": "rollup --config rollup.config.js --environment BUILD:production",
-    "version": "npx ts-node --compiler-options \"{\"module\":\"commonjs\"}\" src/version-bump.ts"
+    "version": "node scripts/version-bump.mjs"
   },
   "keywords": [],
   "author": "",

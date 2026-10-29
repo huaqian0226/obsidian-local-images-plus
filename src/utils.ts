@@ -514,7 +514,10 @@ export function isPathInExcludedFolders(pathValue: string, excludePaths: Array<s
 export function countRemoteLinksInContent(content: string = "", patterns: RegExp[] = MD_SEARCH_PATTERN, settings?: ISettings): number {
   const seen = new Set<string>();
   for (const pattern of patterns) {
-    for (const match of String(content).matchAll(new RegExp(pattern.source, pattern.flags))) {
+    const regex = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(String(content))) !== null) {
+      if (match[0].length === 0) regex.lastIndex++;
       const parsed = MarkdownLinkParser(match as any);
       if (!/^(https?:|data:|file:)/i.test(parsed.link || "")) continue;
       const excluded = (settings?.UrlExcludeRegexps || "").split(/[\r\n]+/).some(raw => {
