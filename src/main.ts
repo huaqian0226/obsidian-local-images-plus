@@ -899,6 +899,27 @@ export default class LocalImagesPlugin extends Plugin {
       }
     }
 
+    const referencedPaths = new Set<string>();
+    const bareReferenceNames = new Set<string>();
+    if (type === "plugin" || type === "obsidian") {
+      const existingPaths = new Set(allFiles.map(file => file.path));
+      for (const file of allFiles) {
+        if (!this.ExemplaryOfMD(file.path) && !this.ExemplaryOfCANVAS(file.path)) continue;
+        await collectFileLinks(file, link => {
+          let clean = String(link || "").split(/[?#|]/)[0];
+          try { clean = decodeURI(clean); } catch { /* Keep malformed escapes unchanged. */ }
+          clean = normalizePath(clean).replace(/^app:\/\/(?:local\/)?/, "");
+          if (!clean || /^(?:https?:|data:|file:)/i.test(clean)) return;
+          // Resolve both Obsidian vault paths and note-relative Markdown paths.
+          for (const candidate of [clean.replace(/^\//, ""), pathJoin([path.dirname(file.path), clean])]) {
+            if (existingPaths.has(candidate)) referencedPaths.add(candidate);
+          }
+          if (!clean.includes("/")) bareReferenceNames.add(clean);
+        });
+      }
+    }
+    const isReferenced = (attachment: TFile) => referencedPaths.has(attachment.path) || bareReferenceNames.has(attachment.name);
+
     if (type == "plugin") {
       let orphanedAttachments = []
       let allAttachmentsLinks: Array<string> = []
@@ -913,10 +934,6 @@ export default class LocalImagesPlugin extends Plugin {
 
       if (this.ExemplaryOfMD(noteFile.path)) {
         const noteParentPath = (noteFile.parent && noteFile.parent.path) ? noteFile.parent.path : ""
-        if (isOrphanExcluded(noteParentPath)) {
-          showBalloon("This note folder is excluded from orphan deletion.", this.settings.showNotifications)
-          return
-        }
         // Use the note's actual attachment dir (handles ./images and ${notename} alike).
         const oldRootdir = await getMDir(this.app, noteFile, this.settings)
         if (! await this.app.vault.exists(oldRootdir)) {
@@ -928,13 +945,13 @@ export default class LocalImagesPlugin extends Plugin {
         // Folder-level: collect links from every note/canvas sharing this folder.
         for (const file of allFiles) {
           const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
-          if (parentPath !== noteParentPath || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
+          if ((!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
             continue
           }
           await collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue))
         }
         for (const attach of allAttachments) {
-          if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
+          if (!isOrphanExcluded(attach.path) && !isReferenced(attach) && !allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
             logError("orph: " + attach.basename)
             orphanedAttachments.push(attach)
           }
@@ -981,9 +998,6 @@ export default class LocalImagesPlugin extends Plugin {
         }
         for (const file of allFiles) {
           const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
-          if (isOrphanExcluded(parentPath)) {
-            continue
-          }
           if (!file || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
             continue
           }
@@ -1015,7 +1029,7 @@ export default class LocalImagesPlugin extends Plugin {
             if (attach.children != undefined) {
               continue
             }
-            if (!usedSet.has(attach.name)) {
+            if (!isOrphanExcluded(attach.path) && !isReferenced(attach) && !usedSet.has(attach.name)) {
               orphanedAttachments.push(attach)
               folderOrphanCount++
             }
@@ -1045,16 +1059,13 @@ export default class LocalImagesPlugin extends Plugin {
         let allAttachmentsLinks: Array<string> = []
         for (const file of allFiles) {
           const parentPath = (file?.parent && file.parent.path) ? file.parent.path : ""
-          if (isOrphanExcluded(parentPath)) {
-            continue
-          }
           if (!file || (!this.ExemplaryOfCANVAS(file.path) && !this.ExemplaryOfMD(file.path))) {
             continue
           }
           await collectFileLinks(file, (linkValue) => collectBasename(allAttachmentsLinks, linkValue))
         }
         for (const attach of allAttachments) {
-          if (!allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
+          if (!isOrphanExcluded(attach.path) && !isReferenced(attach) && !allAttachmentsLinks.includes(attach.name) && attach.children == undefined) {
             logError(allAttachmentsLinks)
             logError(attach.name)
             logError("orph: " + attach.name)
